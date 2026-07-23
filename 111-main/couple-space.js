@@ -551,6 +551,14 @@ window.addEventListener('message', function(e) {
   if (e.data && e.data.type === 'coupleSpaceGardenWaterReward') {
     handleCoupleSpaceGardenWaterReward(e.data);
   }
+  if (e.data && e.data.type === 'coupleSpaceGardenRequestZeroRepair') {
+    repairCoupleGardenZeroRewards(e.data.charId).then(() => {
+      const iframe = document.getElementById('couple-space-iframe');
+      if (iframe && iframe.contentWindow) {
+        iframe.contentWindow.postMessage({ type: 'coupleSpaceGardenDataRepaired' }, '*');
+      }
+    }).catch(err => console.error('Garden zero-reward repair failed:', err));
+  }
 
   // --- Location requests ---
   if (e.data && e.data.type === 'coupleSpaceLocationAiRequest') {
@@ -4542,6 +4550,8 @@ function setupCoupleSpaceGardenAutoTimer() {
       }
     } catch(e) {}
   });
+  // 启动时补全历史 0 元浇水记录
+  repairAllCoupleGardenZeroRewards().catch(e => console.error('Garden zero-reward repair failed:', e));
 }
 
 function scheduleGardenAutoWater(charId, timeStr) {
@@ -4573,8 +4583,9 @@ const COUPLE_GARDEN_DEFAULT_SPECIAL_DATES = [
   { date: '12-31', name: '跨年', coins: 131.40 }
 ];
 
-function calculateCoupleSpaceGardenWaterReward(charId) {
-  const now = new Date();
+function calculateCoupleSpaceGardenWaterReward(charId, atTime) {
+  const now = atTime != null ? new Date(atTime) : new Date();
+  if (isNaN(now.getTime())) return { amount: COUPLE_GARDEN_NORMAL_REWARD, special: null };
   const mmdd = String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
   for (let i = 0; i < COUPLE_GARDEN_DEFAULT_SPECIAL_DATES.length; i++) {
     if (COUPLE_GARDEN_DEFAULT_SPECIAL_DATES[i].date === mmdd) {
@@ -4603,6 +4614,112 @@ function calculateCoupleSpaceGardenWaterReward(charId) {
     }
   } catch (e) {}
   return { amount: COUPLE_GARDEN_NORMAL_REWARD, special: null };
+}
+
+/** 补回历史 coinsEarned 为 0 的浇水记录（按浇水当天规则），并补发钱包 */
+async function repairCoupleGardenZeroRewards(charId) {
+  if (!charId) return { fixed: 0, delta: 0 };
+  const lockKey = 'coupleGardenZeroRepairLock_' + charId;
+  if (localStorage.getItem(lockKey)) return { fixed: 0, delta: 0 };
+  localStorage.setItem(lockKey, String(Date.now()));
+
+  try {
+    let gd;
+    try {
+      gd = JSON.parse(localStorage.getItem('coupleGarden_' + charId) || '{}');
+    } catch (e) {
+      return { fixed: 0, delta: 0 };
+    }
+    if (!gd.waterLogs || !gd.waterLogs.length) return { fixed: 0, delta: 0 };
+
+    let fixed = 0;
+    let delta = 0;
+    const walletCredits = [];
+    let changed = false;
+
+    for (let i = 0; i < gd.waterLogs.length; i++) {
+      const w = gd.waterLogs[i];
+
+      // 补金额
+      if (!(Number(w.coinsEarned) > 0)) {
+        const reward = calculateCoupleSpaceGardenWaterReward(charId, w.createdAt);
+        const amount = Number(reward.amount) || COUPLE_GARDEN_NORMAL_REWARD;
+        w.coinsEarned = amount;
+        w.specialDate = reward.special ? { name: reward.special.name, coins: reward.special.coins } : null;
+        if (!w.rewardBackfilled) w.needsWalletBackfill = true;
+        delta += amount;
+        fixed++;
+        changed = true;
+      }
+
+      // 补钱包（仅历史 0 元漏洞记录，避免重复入账正常浇水）
+      if (w.needsWalletBackfill && !w.rewardBackfilled && Number(w.coinsEarned) > 0) {
+        w.rewardBackfilled = true;
+        delete w.needsWalletBackfill;
+        changed = true;
+        walletCredits.push({
+          author: w.author === 'user' ? 'user' : 'char',
+          amount: Number(w.coinsEarned),
+          description: (w.specialDate && w.specialDate.name)
+            ? ('情侣树浇水补发-' + w.specialDate.name)
+            : '情侣树浇水奖励补发'
+        });
+      }
+    }
+
+    if (!changed) return { fixed: 0, delta: 0 };
+
+    if (delta > 0) gd.totalCoins = (gd.totalCoins || 0) + delta;
+    localStorage.setItem('coupleGarden_' + charId, JSON.stringify(gd));
+
+    for (const credit of walletCredits) {
+      try {
+        await handleCoupleSpaceGardenWaterReward({
+          charId,
+          author: credit.author,
+          amount: credit.amount,
+          description: credit.description
+        });
+      } catch (e) {
+        console.error('Garden zero-reward wallet backfill failed:', e);
+      }
+    }
+
+    if (fixed > 0 || walletCredits.length > 0) {
+      console.log(`[情侣空间] 已补回浇水：金额 ${fixed} 条 +${delta.toFixed(2)} 元，钱包 ${walletCredits.length} 笔 (charId=${charId})`);
+    }
+    return { fixed, delta };
+  } finally {
+    localStorage.removeItem(lockKey);
+  }
+}
+
+async function repairAllCoupleGardenZeroRewards() {
+  const charIds = new Set();
+  try {
+    getCoupleSpaces().forEach(s => { if (s.charId) charIds.add(s.charId); });
+  } catch (e) {}
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.indexOf('coupleGarden_') === 0 && key.indexOf('coupleGardenSettings_') !== 0 && key.indexOf('coupleGardenAutoLast_') !== 0) {
+      charIds.add(key.slice('coupleGarden_'.length));
+    }
+  }
+  let totalFixed = 0;
+  let totalDelta = 0;
+  for (const charId of charIds) {
+    const r = await repairCoupleGardenZeroRewards(charId);
+    totalFixed += r.fixed;
+    totalDelta += r.delta;
+  }
+  if (totalFixed > 0) {
+    console.log(`[情侣空间] 历史浇水金额补全完成：${totalFixed} 条，合计 +${totalDelta.toFixed(2)} 元`);
+    const iframe = document.getElementById('couple-space-iframe');
+    if (iframe && iframe.contentWindow) {
+      iframe.contentWindow.postMessage({ type: 'coupleSpaceGardenDataRepaired' }, '*');
+    }
+  }
+  return { fixed: totalFixed, delta: totalDelta };
 }
 
 async function triggerAutoGardenWater(charId, isTimer = false) {

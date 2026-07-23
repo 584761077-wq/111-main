@@ -8233,20 +8233,18 @@ function notifyGardenSettingsChanged() {
   }, '*');
 }
 
-// --- Check today's special date ---
-function getTodaySpecialDate() {
-  var now = new Date();
+// --- Special date on a given day (local MM-DD) ---
+function getSpecialDateAt(atTime) {
+  var now = atTime != null ? new Date(atTime) : new Date();
+  if (isNaN(now.getTime())) return null;
   var mmdd = String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
-  // Check default
   for (var i = 0; i < GARDEN_DEFAULT_SPECIAL_DATES.length; i++) {
     if (GARDEN_DEFAULT_SPECIAL_DATES[i].date === mmdd) return GARDEN_DEFAULT_SPECIAL_DATES[i];
   }
-  // Check custom
   var gd = getGardenData();
-  for (var j = 0; j < gd.specialDates.length; j++) {
+  for (var j = 0; j < (gd.specialDates || []).length; j++) {
     if (gd.specialDates[j].date === mmdd) return gd.specialDates[j];
   }
-  // Check anniversaries
   try {
     var annivs = JSON.parse(localStorage.getItem('coupleAnniv_' + currentCharId) || '[]');
     for (var k = 0; k < annivs.length; k++) {
@@ -8259,6 +8257,10 @@ function getTodaySpecialDate() {
     }
   } catch(e) {}
   return null;
+}
+
+function getTodaySpecialDate() {
+  return getSpecialDateAt(Date.now());
 }
 
 // --- Calculate co-water streak ---
@@ -8289,10 +8291,76 @@ function getCoWaterStreak() {
 }
 
 // --- Calculate reward for a water action ---
-function calculateWaterReward(author) {
-  var special = getTodaySpecialDate();
+function calculateWaterRewardAt(atTime) {
+  var special = getSpecialDateAt(atTime);
   if (special) return { amount: special.coins, special: special };
   return { amount: GARDEN_NORMAL_REWARD, special: null };
+}
+
+function calculateWaterReward(author) {
+  return calculateWaterRewardAt(Date.now());
+}
+
+/** 补回 coinsEarned === 0 的历史浇水记录（仅补金额与标记；钱包由父页面统一补发） */
+function repairGardenZeroRewards() {
+  if (!currentCharId) return false;
+  var lockKey = 'coupleGardenZeroRepairLock_' + currentCharId;
+  if (localStorage.getItem(lockKey)) {
+    window.parent.postMessage({
+      type: 'coupleSpaceGardenRequestZeroRepair',
+      charId: currentCharId
+    }, '*');
+    return false;
+  }
+
+  var gd = getGardenData();
+  var logs = gd.waterLogs || [];
+  if (!logs.length) return false;
+
+  var fixed = 0;
+  var delta = 0;
+  var needWallet = false;
+
+  for (var i = 0; i < logs.length; i++) {
+    var w = logs[i];
+    if (Number(w.coinsEarned) > 0) {
+      if (w.needsWalletBackfill && !w.rewardBackfilled) needWallet = true;
+      continue;
+    }
+
+    var reward = calculateWaterRewardAt(w.createdAt);
+    var amount = Number(reward.amount) || GARDEN_NORMAL_REWARD;
+    w.coinsEarned = amount;
+    w.specialDate = reward.special ? { name: reward.special.name, coins: reward.special.coins } : null;
+    if (!w.rewardBackfilled) {
+      w.needsWalletBackfill = true;
+      needWallet = true;
+    }
+    delta += amount;
+    fixed++;
+  }
+
+  if (fixed === 0 && !needWallet) return false;
+
+  if (fixed > 0) {
+    gd.totalCoins = (gd.totalCoins || 0) + delta;
+    saveGardenData(gd);
+    notifyGardenChanged();
+    showGardenToast('已补回 ' + fixed + ' 条浇水金额 +' + delta.toFixed(2) + '元');
+  } else if (needWallet) {
+    saveGardenData(gd);
+    notifyGardenChanged();
+  }
+
+  // 请父页面统一补发钱包，避免双边重复入账
+  if (needWallet) {
+    window.parent.postMessage({
+      type: 'coupleSpaceGardenRequestZeroRepair',
+      charId: currentCharId
+    }, '*');
+  }
+
+  return fixed > 0;
 }
 
 // --- Check and grant streak reward ---
@@ -8411,6 +8479,7 @@ var SVG_WATER = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" str
 function renderGardenPage() {
   var root = document.getElementById('garden-page-root');
   if (!root) return;
+  repairGardenZeroRewards();
   var gd = getGardenData();
   var stage = getTreeStage(gd.totalCoins);
   var streak = getCoWaterStreak();
@@ -9213,6 +9282,11 @@ window.addEventListener('message', function(e) {
       else renderGardenPage();
       showGardenToast((csCharName || 'TA') + '也点了爱心');
     }
+  }
+
+  // Parent repaired garden data — refresh UI
+  if (e.data && e.data.type === 'coupleSpaceGardenDataRepaired') {
+    if (typeof renderGardenPage === 'function') renderGardenPage();
   }
 
   // Auto garden result
