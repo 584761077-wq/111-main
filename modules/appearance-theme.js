@@ -184,7 +184,7 @@
 
       'preset': '预设',
 
-      'tutorial': '教程',
+      'tutorial': 'mcp',
       'werewolf': '狼人杀',
 
       'x': 'X',

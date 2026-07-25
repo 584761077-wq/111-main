@@ -78627,6 +78627,7 @@ ${linkedContents}
       document.getElementById('watch-together-search-modal').classList.remove('visible');
 
       // 加载视频
+      document.getElementById('watch-together-video').dataset.title = title;
       loadWatchTogetherVideoFromUrl(url);
 
       // 显示提示
