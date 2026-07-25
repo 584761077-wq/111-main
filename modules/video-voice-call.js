@@ -176,7 +176,11 @@
         timestamp: Date.now(),
         duration: duration,
         participants: participantsData,
-        transcript: [...videoCallState.callHistory]
+        transcript: videoCallState.callHistory.map(h => ({
+          role: h.role,
+          content: typeof h.content === 'string' ? h.content : userInputTextFromContent(h.content),
+          timestamp: h.timestamp
+        }))
       };
       await db.callRecords.add(callRecord);
       console.log("通话记录已保存:", callRecord);
@@ -223,9 +227,12 @@
     clearInterval(callTimerInterval);
     callTimerInterval = null;
 
-    // 停止摄像头
+    // 停止摄像头并释放截图缓存
     if (typeof stopCamera === 'function') {
       stopCamera();
+    }
+    if (typeof window.clearLastCameraCapture === 'function') {
+      window.clearLastCameraCapture();
     }
 
     videoCallState = {
@@ -414,23 +421,22 @@ ${linkedContents}
       callFeed.appendChild(userBubble);
       callFeed.scrollTop = callFeed.scrollHeight;
 
-      // 检查是否启用真实摄像头并获取截图
+      // 检查是否启用真实摄像头：截图只用于「本轮 API」，不写入 callHistory（防 base64 堆积）
       let userContent = userInput;
+      let pendingCameraImage = null;
       if (chat.videoOptimization && chat.videoOptimization.enableRealCamera) {
         const capturedImage = window.getLastCameraCapture ? window.getLastCameraCapture() : null;
         if (capturedImage) {
-          // 为支持视觉的模型构建多模态消息
-          userContent = [
-            { type: 'text', text: userInput },
-            { type: 'image_url', image_url: { url: capturedImage } }
-          ];
+          pendingCameraImage = capturedImage;
+          userContent = userInput; // history 只存文字
         }
       }
 
       videoCallState.callHistory.push({
         role: 'user',
         content: userContent,
-        timestamp: userTimestamp
+        timestamp: userTimestamp,
+        _pendingCameraImage: pendingCameraImage || undefined
       });
     }
 
@@ -495,10 +501,7 @@ ${linkedContents}
       role: 'system',
       content: inCallPrompt
     },
-    ...videoCallState.callHistory.map(h => ({
-      role: h.role,
-      content: h.content
-    }))
+    ...buildCallHistoryForApi(videoCallState.callHistory)
     ];
 
     if (videoCallState.callHistory.length === 0) {
@@ -695,13 +698,92 @@ ${linkedContents}
         content: `[ERROR: ${error.message}]`
       });
     }
-    // ★ 每次发送后修剪历史
+    // ★ 每次发送后修剪历史 + 通话气泡 DOM（防 iOS PWA 长通话内存爆）
     trimCallHistory(videoCallState);
+    trimCallFeed(callFeed);
   }
-  function trimCallHistory(callState) {
-    if (callState.callHistory.length > 100) {
-      callState.callHistory = callState.callHistory.slice(-100);
+
+  /** 通话记录上限：过长会带着摄像头 base64 把 Safari 内存打满 */
+  const CALL_HISTORY_MAX = 40;
+  const CALL_FEED_DOM_MAX = 36;
+
+  function stripHeavyCallContent(content) {
+    if (!content) return content;
+    if (Array.isArray(content)) {
+      return content.map(part => {
+        if (part && part.type === 'image_url') {
+          return { type: 'text', text: '[摄像头画面已释放]' };
+        }
+        return part;
+      });
     }
+    if (typeof content === 'string' && content.startsWith('data:image')) {
+      return '[图片已释放]';
+    }
+    return content;
+  }
+
+  function trimCallHistory(callState) {
+    if (!callState || !Array.isArray(callState.callHistory)) return;
+
+    // 只保留最近一条带图内容，其余一律去掉 base64，避免 callHistory 堆截图
+    let keptImage = false;
+    for (let i = callState.callHistory.length - 1; i >= 0; i--) {
+      const entry = callState.callHistory[i];
+      const hasImage = Array.isArray(entry.content)
+        ? entry.content.some(p => p && p.type === 'image_url')
+        : (typeof entry.content === 'string' && entry.content.startsWith('data:image'));
+      if (hasImage) {
+        if (keptImage) {
+          entry.content = stripHeavyCallContent(entry.content);
+        } else {
+          keptImage = true;
+        }
+      }
+    }
+
+    if (callState.callHistory.length > CALL_HISTORY_MAX) {
+      callState.callHistory = callState.callHistory.slice(-CALL_HISTORY_MAX);
+    }
+  }
+
+  function trimCallFeed(callFeed) {
+    if (!callFeed) return;
+    const bubbles = callFeed.querySelectorAll('.call-message-bubble');
+    const overflow = bubbles.length - CALL_FEED_DOM_MAX;
+    if (overflow <= 0) return;
+    for (let i = 0; i < overflow; i++) {
+      bubbles[i].remove();
+    }
+  }
+
+  /** 发给 API 的通话记录：截图仅附着在带 _pendingCameraImage 的最后一条，用完即清 */
+  function buildCallHistoryForApi(callHistory) {
+    const list = Array.isArray(callHistory) ? callHistory : [];
+    return list.map((h, idx) => {
+      let content = h.content;
+      const isLast = idx === list.length - 1;
+      if (isLast && h._pendingCameraImage) {
+        content = [
+          { type: 'text', text: typeof content === 'string' ? content : userInputTextFromContent(content) },
+          { type: 'image_url', image_url: { url: h._pendingCameraImage } }
+        ];
+        // 用过一次就丢掉，避免截图常驻 callHistory
+        delete h._pendingCameraImage;
+      } else {
+        content = stripHeavyCallContent(content);
+      }
+      return { role: h.role, content };
+    });
+  }
+
+  function userInputTextFromContent(content) {
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+      const textPart = content.find(p => p && p.type === 'text');
+      return textPart ? textPart.text : '';
+    }
+    return '';
   }
 
 
@@ -1072,10 +1154,7 @@ ${worldBookContent}
       role: 'system',
       content: inCallPrompt
     },
-    ...voiceCallState.callHistory.map(h => ({
-      role: h.role,
-      content: h.content
-    }))
+    ...buildCallHistoryForApi(voiceCallState.callHistory)
     ];
 
     if (voiceCallState.callHistory.length === 0) {
@@ -1197,8 +1276,9 @@ ${worldBookContent}
         content: `[ERROR: ${error.message}]`
       });
     }
-    // ★ 每次发送后修剪历史
+    // ★ 每次发送后修剪历史 + 通话气泡 DOM（防 iOS PWA 长通话内存爆）
     trimCallHistory(voiceCallState);
+    trimCallFeed(callFeed);
   }
 
   // ==================== 语音通话功能结束 ====================

@@ -461,6 +461,26 @@
     hideLoader(messagesContainer);
     messagesContainer.prepend(fragment);
 
+    // 上滑加载也限制 DOM，避免翻历史时节点无限涨（iOS PWA 易被杀）
+    const MAX_DOM_NODES = 60;
+    const allBubbles = messagesContainer.querySelectorAll('.message-wrapper');
+    if (allBubbles.length > MAX_DOM_NODES) {
+      const overflow = allBubbles.length - MAX_DOM_NODES;
+      let removed = 0;
+      // 从底部（最新侧）移除多余气泡，保留刚 prepend 的更早消息
+      for (let i = allBubbles.length - 1; i >= 0 && removed < overflow; i--) {
+        const el = allBubbles[i];
+        if (!el) continue;
+        if (el.id === 'load-more-btn' || el.classList.contains('load-more-btn')) continue;
+        el.querySelectorAll('img').forEach(img => {
+          img.removeAttribute('src');
+          img.src = '';
+        });
+        el.remove();
+        removed++;
+        if (currentRenderedCount > 0) currentRenderedCount--;
+      }
+    }
 
     const newScrollHeight = messagesContainer.scrollHeight;
     messagesContainer.scrollTop = newScrollHeight - oldScrollHeight;
@@ -1462,15 +1482,20 @@
     const bubbles = messagesContainer.querySelectorAll('.message-wrapper');
 
     if (bubbles.length > MAX_DOM_NODES) {
-      // 移除最上面的元素（除了加载更多按钮）
-      // 注意：如果你有"加载更多"按钮在第一个位置，要从第二个开始删
       const itemsToRemove = bubbles.length - MAX_DOM_NODES;
       for (let i = 0; i < itemsToRemove; i++) {
-        // 确保不删除 load-more-btn
         if (!bubbles[i].id && !bubbles[i].classList.contains('load-more-btn')) {
+          // iOS Safari：先断开图片引用再移除，帮助回收解码后的位图内存
+          bubbles[i].querySelectorAll('img').forEach(img => {
+            img.removeAttribute('src');
+            img.src = '';
+          });
+          bubbles[i].querySelectorAll('video, audio').forEach(media => {
+            try { media.pause(); } catch (e) {}
+            media.removeAttribute('src');
+            media.load && media.load();
+          });
           bubbles[i].remove();
-          // 同时修正 currentRenderedCount，防止加载逻辑错乱
-          // (这一步取决于你的 loadMoreMessages 逻辑，通常不需要手动减，因为它是基于 slice 计算的)
         }
       }
     }

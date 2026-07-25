@@ -521,6 +521,31 @@
     });
   }
 
+  /**
+   * 清理聊天历史里过旧的思维链气泡，避免勤自动回复 + 思维链把内存顶爆。
+   * 思维链不参与 API 上下文，只影响展示，保留最近若干条即可。
+   */
+  function pruneChatHistoryForMemory(chat) {
+    if (!chat || !Array.isArray(chat.history)) return;
+
+    const KEEP_THOUGHT_CHAINS = 12;
+    const thoughtIndices = [];
+    for (let i = 0; i < chat.history.length; i++) {
+      if (chat.history[i] && chat.history[i].type === 'thought_chain_block') {
+        thoughtIndices.push(i);
+      }
+    }
+    if (thoughtIndices.length > KEEP_THOUGHT_CHAINS) {
+      const removeSet = new Set(thoughtIndices.slice(0, thoughtIndices.length - KEEP_THOUGHT_CHAINS));
+      chat.history = chat.history.filter((_, idx) => !removeSet.has(idx));
+    }
+
+    // API 调试记录本身极大（整份请求/响应），iOS 上必须严控
+    if (Array.isArray(chat.apiHistory) && chat.apiHistory.length > 8) {
+      chat.apiHistory = chat.apiHistory.slice(-8);
+    }
+  }
+
   function parseAiResponse(content) {
     if (!content) return [{
       type: 'text',
@@ -3793,19 +3818,24 @@ ${getActiveThoughtsPrompt()}
 
       // 方案4：只有在全局设置中启用API历史记录时才保存
       if (state.globalSettings.enableApiHistory) {
-        // 保存到聊天的API历史中
+        // 保存到聊天的API历史中（只留精简摘要，避免整份响应驻留内存）
         if (!chat.apiHistory) {
           chat.apiHistory = [];
         }
-        chat.apiHistory.push(responseData);
+        chat.apiHistory.push({
+          responseTimestamp: responseData.responseTimestamp,
+          responseStatus: responseData.responseStatus,
+          aiResponsePreview: String(aiResponseContent || '').substring(0, 500)
+        });
 
-        // 限制历史记录数量，只保留最近50条
-        if (chat.apiHistory.length > 50) {
-          chat.apiHistory = chat.apiHistory.slice(-50);
+        // 限制历史记录数量
+        if (chat.apiHistory.length > 8) {
+          chat.apiHistory = chat.apiHistory.slice(-8);
         }
       }
 
-      // 保存到数据库
+      // 保存到数据库前先清掉过旧思维链，降低长聊内存
+      pruneChatHistoryForMemory(chat);
       await db.chats.put(chat);
 
       lastRawAiResponse = aiResponseContent;
@@ -6555,6 +6585,7 @@ ${getActiveThoughtsPrompt()}
         await triggerAiResponse();
         return;
       }
+      pruneChatHistoryForMemory(chat);
       await db.chats.put(chat);
 
       const qzoneActionTaken = messagesArray.some(action =>

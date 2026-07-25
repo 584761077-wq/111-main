@@ -248,7 +248,13 @@ class VariableMemoryManager {
   async getEmbedding(text, chat) {
     if (!text || !text.trim()) return null;
     const cacheKey = text.trim().substring(0, 200);
-    if (this.embeddingCache.has(cacheKey)) return this.embeddingCache.get(cacheKey);
+    if (this.embeddingCache.has(cacheKey)) {
+      // LRU：读到则挪到末尾
+      const cached = this.embeddingCache.get(cacheKey);
+      this.embeddingCache.delete(cacheKey);
+      this.embeddingCache.set(cacheKey, cached);
+      return cached;
+    }
 
     try {
       const vm = this.getVariableMemory(chat);
@@ -278,7 +284,14 @@ class VariableMemoryManager {
       if (!response.ok) return null;
       const data = await response.json();
       const embedding = data?.data?.[0]?.embedding || null;
-      if (embedding) this.embeddingCache.set(cacheKey, embedding);
+      if (embedding) {
+        this.embeddingCache.set(cacheKey, embedding);
+        const EMBEDDING_CACHE_MAX = 300;
+        while (this.embeddingCache.size > EMBEDDING_CACHE_MAX) {
+          const oldestKey = this.embeddingCache.keys().next().value;
+          this.embeddingCache.delete(oldestKey);
+        }
+      }
       return embedding;
     } catch (e) {
       return null;

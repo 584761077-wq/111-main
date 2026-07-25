@@ -424,7 +424,11 @@ ${tasksString}
         });
       `;
       const blob = new Blob([workerCode], { type: 'application/javascript' });
-      smartKeepAliveWorker = new Worker(URL.createObjectURL(blob));
+      const workerUrl = URL.createObjectURL(blob);
+      smartKeepAliveWorker = new Worker(workerUrl);
+      // Worker 创建后即可释放 blob URL，避免泄漏
+      URL.revokeObjectURL(workerUrl);
+      smartKeepAliveWorker._blobRevoked = true;
       smartKeepAliveWorker.onmessage = (e) => {
         if (e.data === 'tick' && smartKeepAliveEnabled) {
           // 在此保持主线程略微活跃

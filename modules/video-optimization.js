@@ -441,6 +441,9 @@ function stopCamera() {
     videoElement.srcObject = null;
   }
 
+  // 释放摄像头截图（JPEG base64 很大，长通话不释放会撑爆 iOS）
+  lastCapturedImage = null;
+
   updateCameraStatus(false, '摄像头已停止');
 }
 
@@ -457,20 +460,29 @@ function updateCameraStatus(isActive, message) {
   }
 }
 
-// 截取摄像头画面
+// 截取摄像头画面（缩小分辨率 + 降质量，复用 canvas，显著降低内存）
+let _cameraCaptureCanvas = null;
 function captureCameraFrame() {
   const videoElement = document.getElementById('local-camera-video');
   if (!videoElement || !cameraStream) return null;
 
-  const canvas = document.createElement('canvas');
-  canvas.width = videoElement.videoWidth;
-  canvas.height = videoElement.videoHeight;
+  const srcW = videoElement.videoWidth || 640;
+  const srcH = videoElement.videoHeight || 480;
+  const maxSide = 640;
+  const scale = Math.min(1, maxSide / Math.max(srcW, srcH));
+
+  if (!_cameraCaptureCanvas) {
+    _cameraCaptureCanvas = document.createElement('canvas');
+  }
+  const canvas = _cameraCaptureCanvas;
+  canvas.width = Math.max(1, Math.round(srcW * scale));
+  canvas.height = Math.max(1, Math.round(srcH * scale));
 
   const ctx = canvas.getContext('2d');
-  ctx.drawImage(videoElement, 0, 0);
+  ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
 
-  // 转换为base64
-  const imageData = canvas.toDataURL('image/jpeg', 0.8);
+  // 转换为压缩 JPEG
+  const imageData = canvas.toDataURL('image/jpeg', 0.55);
   lastCapturedImage = imageData;
 
   return imageData;
@@ -495,6 +507,10 @@ function startCameraCapture(intervalSeconds) {
 // 获取最新截图
 window.getLastCameraCapture = function () {
   return lastCapturedImage;
+};
+
+window.clearLastCameraCapture = function () {
+  lastCapturedImage = null;
 };
 
 // 在页面加载完成后初始化

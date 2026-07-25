@@ -42,6 +42,32 @@
   // --- TTS 播放队列（修复：前一条没读完就跳到最后一条的问题） ---
   const ttsQueue = [];
   let isTtsPlaying = false;
+  let currentCallTtsObjectUrl = null;
+  let currentChatTtsObjectUrl = null;
+  const TTS_CACHE_MAX = 15;
+  const TTS_QUEUE_MAX = 8;
+
+  function revokeCallTtsUrl() {
+    if (currentCallTtsObjectUrl) {
+      try { URL.revokeObjectURL(currentCallTtsObjectUrl); } catch (e) {}
+      currentCallTtsObjectUrl = null;
+    }
+  }
+
+  function revokeChatTtsUrl() {
+    if (currentChatTtsObjectUrl) {
+      try { URL.revokeObjectURL(currentChatTtsObjectUrl); } catch (e) {}
+      currentChatTtsObjectUrl = null;
+    }
+  }
+
+  function trimTtsCache() {
+    if (!state.ttsCache || typeof state.ttsCache.size !== 'number') return;
+    while (state.ttsCache.size > TTS_CACHE_MAX) {
+      const oldestKey = state.ttsCache.keys().next().value;
+      state.ttsCache.delete(oldestKey);
+    }
+  }
 
   function stopTtsQueue() {
     ttsQueue.length = 0;
@@ -51,8 +77,11 @@
       callPlayer.onended = null;
       callPlayer.onerror = null;
       callPlayer.pause();
+      callPlayer.removeAttribute('src');
       callPlayer.src = '';
+      try { callPlayer.load(); } catch (e) {}
     }
+    revokeCallTtsUrl();
   }
 
   // 单条语音消息播放状态（用于同一条点两次=暂停/取消，退出聊天=停播）
@@ -73,11 +102,14 @@
       ttsPlayer.onended = null;
       ttsPlayer.onpause = null;
       ttsPlayer.pause();
+      ttsPlayer.removeAttribute('src');
       ttsPlayer.src = '';
+      try { ttsPlayer.load(); } catch (e) {}
       delete ttsPlayer.dataset.currentText;
       delete ttsPlayer.dataset.currentVoiceId;
       delete ttsPlayer.dataset.currentMessageKey;
     }
+    revokeChatTtsUrl();
     document.querySelectorAll('.voice-play-btn').forEach(btn => { btn.textContent = '▶'; });
     document.querySelectorAll('.voice-message-body .loading-spinner').forEach(el => { el.style.display = 'none'; });
     document.querySelectorAll('.voice-message-body .voice-play-btn').forEach(btn => { btn.style.display = 'flex'; });
@@ -147,7 +179,9 @@
 
       const audioBytes = hexToUint8Array(audioHex);
       const audioBlob = new Blob([audioBytes], { type: 'audio/mpeg' });
+      revokeCallTtsUrl();
       const audioUrl = URL.createObjectURL(audioBlob);
+      currentCallTtsObjectUrl = audioUrl;
 
       const callPlayer = document.getElementById('call-tts-audio-player');
       callPlayer.src = audioUrl;
@@ -155,11 +189,11 @@
 
       // 播完这条再播下一条
       callPlayer.onended = () => {
-        URL.revokeObjectURL(audioUrl);
+        revokeCallTtsUrl();
         processNextTts();
       };
       callPlayer.onerror = () => {
-        URL.revokeObjectURL(audioUrl);
+        revokeCallTtsUrl();
         processNextTts();
       };
 
@@ -192,8 +226,11 @@
     const { minimaxGroupId, minimaxApiKey } = state.apiConfig;
     if (!minimaxGroupId || !minimaxApiKey || !voiceId) return;
 
-    // 3. 推入队列，串行处理
+    // 3. 推入队列，串行处理（队列过长时丢掉最旧的，避免通话 TTS 堆积）
     ttsQueue.push({ text: cleanText, voiceId });
+    while (ttsQueue.length > TTS_QUEUE_MAX) {
+      ttsQueue.shift();
+    }
 
     if (!isTtsPlaying) {
       processNextTts();
@@ -413,17 +450,23 @@
       const audioBlob = new Blob([audioBytes], {
         type: 'audio/mpeg'
       });
+      revokeChatTtsUrl();
       const audioUrl = URL.createObjectURL(audioBlob);
+      currentChatTtsObjectUrl = audioUrl;
 
-      await playAudioFromData(audioUrl, 'audio/mpeg', text, voiceId, bodyElement, messageKey, () => { currentTtsMessageKey = ''; });
+      await playAudioFromData(audioUrl, 'audio/mpeg', text, voiceId, bodyElement, messageKey, () => {
+        currentTtsMessageKey = '';
+        revokeChatTtsUrl();
+      });
 
-      // 写入缓存
+      // 写入缓存（限制条数，防止 base64 音频无限堆积）
       const reader = new FileReader();
       reader.onloadend = function () {
         state.ttsCache.set(cacheKey, {
           url: reader.result,
           type: 'audio/mpeg'
         });
+        trimTtsCache();
       }
       reader.readAsDataURL(audioBlob);
 
