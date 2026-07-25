@@ -194,3 +194,77 @@
 .custom-thoughts-actions {
     gap: 0 !important;
 }
+
+/* 全局黑色控件主题 */
+:root {
+    --accent-color: #000000;
+}
+
+/* 仅为原本有实色背景的主按钮切换为黑色，保留文字、图标等透明按钮。 */
+.form-button,
+.action-button:not(.chat-action-icon-btn) {
+    background-color: #000000 !important;
+    border-color: #000000 !important;
+    color: #ffffff !important;
+}
+
+/* 聊天输入区的圆形功能按钮维持原有半透明样式。 */
+#chat-input-actions-top .chat-action-icon-btn {
+    background-color: rgba(255, 255, 255, 0.5) !important;
+    border-color: rgba(0, 0, 0, 0.05) !important;
+    color: var(--text-primary) !important;
+}
+
+.header .save-btn,
+.save-btn,
+#save-api-settings-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 32px;
+    padding: 0 10px;
+    box-sizing: border-box;
+    border-radius: 6px;
+    background-color: #000000 !important;
+    color: #ffffff !important;
+}
+
+/* 使用浏览器原生进度轨道：仅滑过的部分为黑色，未滑过部分保持默认浅色。 */
+input[type="range"] {
+    accent-color: #000000;
+}
+
+input:checked + .slider {
+    background-color: #000000 !important;
+}
+
+/* 角色手机的 QQ 对话采用简洁的黑白无头像样式。 */
+#char-conversation-messages {
+    background-color: #ffffff !important;
+}
+
+#char-conversation-messages .avatar-group,
+#char-conversation-messages .timestamp {
+    display: none !important;
+}
+
+#char-conversation-messages .message-content-row {
+    width: auto;
+    margin: 0;
+}
+
+#char-conversation-messages .message-bubble {
+    border-radius: 8px !important;
+}
+
+#char-conversation-messages .message-bubble.ai {
+    background-color: #e5e5ea !important;
+    color: #000000 !important;
+    border: none !important;
+}
+
+#char-conversation-messages .message-bubble.user {
+    background-color: #000000 !important;
+    color: #ffffff !important;
+    border: none !important;
+}
