@@ -1,11 +1,12 @@
 (() => {
   'use strict';
 
-  const VERSION = '1.0.0';
+  const VERSION = '1.1.0';
   const STORAGE_KEY = '__mlh_previous_session_v1';
   const SAMPLE_MS = 10000;
   const MAX_SAMPLES = 120;
   const MAX_SITES = 150;
+  const MAX_DOM_SIGNATURES = 12;
   const startedAt = Date.now();
   const sessionId = `${startedAt}-${Math.random().toString(36).slice(2, 8)}`;
   const originals = {
@@ -82,12 +83,27 @@
     } : null;
   }
 
+  function getDomSignatures() {
+    const counts = new Map();
+    document.querySelectorAll('body *').forEach(element => {
+      const tag = element.tagName.toLowerCase();
+      const classes = [...element.classList].slice(0, 2).map(name => `.${safeString(name, 40)}`).join('');
+      const signature = `${tag}${classes}`;
+      counts.set(signature, (counts.get(signature) || 0) + 1);
+    });
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, MAX_DOM_SIGNATURES)
+      .map(([signature, count]) => ({ signature, count }));
+  }
+
   function takeSample() {
     if (destroyed) return;
     const sample = {
       time: Date.now(),
       heap: getHeap(),
       dom: document.getElementsByTagName('*').length,
+      domSignatures: getDomSignatures(),
       images: document.images?.length || 0,
       videos: document.getElementsByTagName('video').length,
       audios: document.getElementsByTagName('audio').length,
@@ -161,6 +177,18 @@
     return item.active + duplicateWeight * 3 + (item.created >= 5 ? item.created : 0);
   }
 
+  function domGrowthReport(list) {
+    const first = list.find(sample => sample.domSignatures?.length)?.domSignatures || [];
+    const last = [...list].reverse().find(sample => sample.domSignatures?.length)?.domSignatures || [];
+    const baseline = new Map(first.map(item => [item.signature, item.count]));
+    return last.map(item => ({
+      signature: item.signature,
+      first: baseline.get(item.signature) || 0,
+      last: item.count,
+      growth: item.count - (baseline.get(item.signature) || 0)
+    })).filter(item => item.growth !== 0).sort((a, b) => b.growth - a.growth).slice(0, 10);
+  }
+
   function buildReport(data, title = '当前会话诊断报告') {
     if (!data) return '没有可用的诊断数据。';
     const list = data.samples || [];
@@ -181,6 +209,7 @@
     const rankedSites = (data.sites || []).map(item => ({ ...item, score: siteScore(item) })).sort((a, b) => b.score - a.score);
     const suspects = rankedSites.filter(item => item.score > 3).slice(0, 12);
     const observations = rankedSites.filter(item => item.score <= 3 && item.active > 0).slice(0, 12);
+    const domGrowth = domGrowthReport(baselineList);
     const suspiciousGrowth = heap.growth > 100 * 1024 * 1024 || dom.growth > 5000 || suspects.some(s => s.score >= 20);
     const confidence = suspiciousGrowth ? '高' : baselineList.length >= 6 ? '中' : '低（稳定期采样较短）';
     const classification = data.endedNormally ? '正常离开/刷新' : '疑似异常崩溃刷新';
@@ -203,8 +232,11 @@
       '【页面与资源（排除启动前60秒）】',
       `DOM 稳定期初始：${dom.first || '无'}\nDOM 最后：${dom.last || '无'}\nDOM 稳定期净增长：${dom.growth >= 0 ? '+' : ''}${dom.growth}\nDOM 最近1分钟：${dom1m.growth >= 0 ? '+' : ''}${dom1m.growth}\nDOM 最近5分钟：${dom5m.growth >= 0 ? '+' : ''}${dom5m.growth}\n图片：${last.images ?? '无'}\n视频：${last.videos ?? '无'}\n音频：${last.audios ?? '无'}\n存活 Interval：${last.intervals ?? 0}\n未撤销 Blob URL：${last.blobs ?? 0}`,
       '',
-      '【高风险嫌疑位置】'
+      '【DOM 类型增长（稳定期首尾）】'
     ];
+    if (!domGrowth.length) lines.push('未记录到可归因的主要 DOM 类型变化。');
+    domGrowth.forEach((item, index) => lines.push(`${index + 1}. ${item.signature}：${item.first} → ${item.last}（${item.growth >= 0 ? '+' : ''}${item.growth}）`));
+    lines.push('', '【高风险嫌疑位置】');
     if (!suspects.length) lines.push('尚未发现重复创建或大量未释放的高风险资源。');
     suspects.forEach((item, index) => lines.push(`${index + 1}. ${item.kind} 风险分=${item.score} 活跃=${item.active} 创建=${item.created} 释放=${item.released}\n   ${item.site}`));
     lines.push('', '【普通长驻资源（不等于泄漏）】');

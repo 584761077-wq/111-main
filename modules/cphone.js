@@ -811,8 +811,8 @@
     pagesContainer.addEventListener('touchmove', onDragMove, { passive: false });
     pagesContainer.addEventListener('touchend', onDragEnd);
 
-    // 点击指示器切换页面
-    const dotHandlers = dots.map((dot, index) => () => {
+    // querySelectorAll 返回 NodeList；部分浏览器没有实现 NodeList.prototype.map
+    const dotHandlers = Array.from(dots, (dot, index) => () => {
       cphoneCurrentPage = index;
       updatePagination();
     });
