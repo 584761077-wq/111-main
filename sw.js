@@ -193,7 +193,11 @@ self.addEventListener('push', event => {
   };
   
   event.waitUntil(
-    self.registration.showNotification(title, options)
+    self.registration.showNotification(title, options).then(() =>
+      clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clientList => {
+        clientList.forEach(client => client.postMessage({ type: 'MCP_PULL_EVENTS' }));
+      })
+    )
   );
 });
 

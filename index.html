@@ -24,6 +24,7 @@
   <link rel="stylesheet" href="structured-memory.css?v=0.0.36">
   <link rel="stylesheet" href="vector-memory.css?v=0.0.36">
   <link rel="stylesheet" href="online-app.css?v=0.0.36">
+  <link rel="stylesheet" href="css/mcp-app.css?v=0.0.36">
   <link rel="stylesheet" href="period-tracker.css?v=0.0.36">
   <link rel="stylesheet" href="focus-timer.css?v=0.0.36">
   <link rel="stylesheet" href="extra.css?v=0.0.36">
@@ -138,6 +139,8 @@
   <script src="force-update.js?v=0.0.36" defer></script>
   <script src="modules/floating-ball.js?v=0.0.36" defer></script>
   <script src="modules/watch-together-pip.js?v=0.0.37" defer></script>
+  <script src="modules/mcp-app.js?v=0.0.36" defer></script>
+  <script src="modules/mcp-background-bridge.js?v=0.0.1" defer></script>
   
   <!-- 保活音频播放器样式（从内联 style 拆分） -->
   <link rel="stylesheet" href="css/keep-alive-player.css?v=0.0.36">
@@ -363,7 +366,7 @@
             </div> 
             <span class="small-widget-label" data-lang-key="homeAppPreset">预设</span>
         </div>
-        <div class="small-widget" onclick="showScreen('tutorial-screen')">
+        <div class="small-widget" onclick="openMcpScreen()">
             <div class="small-widget-icon-wrapper"> 
                 <img class="small-widget-img" id="icon-img-tutorial" src="https://i.postimg.cc/d10GjC4g/IMG-7302.jpg" alt="mcp"> 
             </div> 
@@ -1675,13 +1678,118 @@
       <div id="preset-content-container"></div>
     </div>
     <div id="tutorial-screen" class="screen">
-      <div class="header"> <span class="back-btn" onclick="showScreen('home-screen')">‹</span> <span data-lang-key="tutorialTitle">macp</span> <span style="width: 30px;"></span> </div>
-      <div class="mcp-coming-soon">
-        <div class="mcp-coming-soon__mark">MCP</div>
-        <h2>正在开发中</h2>
-        <p>全新功能即将上线，敬请期待。</p>
+      <div class="header"> <span class="back-btn" onclick="showScreen('home-screen')">‹</span> <span data-lang-key="tutorialTitle">MCP</span> <span style="width: 30px;"></span> </div>
+    </div>
+
+    <!-- MCP 添加服务器：使用与 API 设置页一致的原生设置列表结构 -->
+    <div id="mcp-add-server-screen" class="screen ios-settings-screen">
+      <div class="header mcp-header">
+        <span class="back-btn" onclick="showScreen('mcp-screen')">‹</span>
+        <span>添加服务器</span>
+        <span class="save-btn" id="mcp-save-local-btn">完成</span>
+      </div>
+      <div class="settings-container ios-scroll-container mcp-settings-container">
+        <div class="settings-header">服务器信息</div>
+        <div class="settings-section">
+          <div class="settings-item">
+            <label for="mcp-server-name">服务器名称</label>
+            <div class="settings-right"><input id="mcp-server-name" type="text" placeholder="例如：我的主服务器"></div>
+          </div>
+          <div class="settings-item">
+            <label for="mcp-backend-url">后端地址</label>
+            <div class="settings-right"><input id="mcp-backend-url" type="url" placeholder="https://api.example.com"></div>
+          </div>
+          <div class="settings-item">
+            <label for="mcp-api-token">API Token</label>
+            <div class="settings-right"><input id="mcp-api-token" type="password" autocomplete="off" placeholder="安装完成后生成的 Token"></div>
+          </div>
+          <div class="settings-item">
+            <label for="mcp-server-host">IP / 域名</label>
+            <div class="settings-right"><input id="mcp-server-host" type="text" placeholder="1.2.3.4 或 example.com"></div>
+          </div>
+          <div class="settings-item">
+            <label for="mcp-ssh-port">SSH 端口</label>
+            <div class="settings-right"><input id="mcp-ssh-port" class="settings-num-input" type="number" min="1" max="65535" value="22"></div>
+          </div>
+          <div class="settings-item">
+            <label for="mcp-ssh-user">用户名</label>
+            <div class="settings-right"><input id="mcp-ssh-user" type="text" placeholder="root / ubuntu"></div>
+          </div>
+        </div>
+        <div class="settings-desc">连接信息仅保存在当前设备，除非你主动开启云端同步。</div>
+
+        <div class="settings-header">已保存的后端</div>
+        <div class="settings-section mcp-saved-servers" id="mcp-saved-servers">
+          <div class="mcp-empty-servers">还没有保存后端连接</div>
+        </div>
+        <div class="settings-desc">服务器选择只影响新增的 MCP 后台能力，不会改变现有 PWA 聊天与 API 调用。</div>
+
+        <div class="settings-header">扩展选项</div>
+        <div class="settings-section">
+          <div class="settings-item">
+            <div><div>允许 API 代理</div><div class="mcp-setting-note">仅在 PWA 直连遇到 CORS 时手动使用</div></div>
+            <label class="toggle-switch"><input id="mcp-allow-proxy" type="checkbox"><span class="slider"></span></label>
+          </div>
+          <div class="settings-item">
+            <div><div>同步聊天与记忆</div><div class="mcp-setting-note">默认关闭，开启后才同步至服务器</div></div>
+            <label class="toggle-switch"><input id="mcp-sync-data" type="checkbox"><span class="slider"></span></label>
+          </div>
+          <div class="settings-item">
+            <div><div>定时任务与推送</div><div class="mcp-setting-note">允许服务器保持后台运行</div></div>
+            <label class="toggle-switch"><input id="mcp-enable-jobs" type="checkbox"><span class="slider"></span></label>
+          </div>
+        </div>
+
+        <div class="settings-header">连接</div>
+        <div class="settings-section mcp-connection-actions">
+          <button type="button" id="mcp-test-connection-btn" class="mcp-connection-button mcp-test-button">
+            <span class="mcp-button-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+            </span>
+            <span class="mcp-button-copy"><strong>测试连接</strong><small>验证后端服务与 API Token</small></span>
+            <span class="mcp-button-chevron">›</span>
+          </button>
+          <button type="button" id="mcp-save-config-btn" class="mcp-connection-button">
+            <span class="mcp-button-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M5 4h12l2 2v14H5zM8 4v6h8V4M8 20v-6h8v6"/></svg>
+            </span>
+            <span class="mcp-button-copy"><strong>保存到 PWA</strong><small>只保存到当前设备，不依赖后端</small></span>
+            <span class="mcp-button-chevron">›</span>
+          </button>
+          <button type="button" id="mcp-sync-config-btn" class="mcp-connection-button mcp-save-button">
+            <span class="mcp-button-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"/></svg>
+            </span>
+            <span class="mcp-button-copy"><strong>同步扩展配置</strong><small>复制 PWA 后台配置与角色上下文</small></span>
+            <span class="mcp-button-chevron">›</span>
+          </button>
+          <button type="button" id="mcp-authorize-api-btn" class="mcp-connection-button">
+            <span class="mcp-button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3a5 5 0 0 0-5 5v3H5v9h14v-9h-2V8a5 5 0 0 0-5-5zM9 11V8a3 3 0 0 1 6 0v3"/></svg></span>
+            <span class="mcp-button-copy"><strong>授权后台 API</strong><small>将 PWA 选定 API 加密保存到个人 VPS</small></span><span class="mcp-button-chevron">›</span>
+          </button>
+          <button type="button" id="mcp-enable-push-btn" class="mcp-connection-button">
+            <span class="mcp-button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg></span>
+            <span class="mcp-button-copy"><strong>连接 Web Push</strong><small>上传当前 iOS PWA 的推送订阅</small></span><span class="mcp-button-chevron">›</span>
+          </button>
+          <button type="button" id="mcp-pull-events-btn" class="mcp-connection-button">
+            <span class="mcp-button-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v6h-6"/></svg>
+            </span>
+            <span class="mcp-button-copy"><strong>拉取后台消息</strong><small>合并 VPS 消息到原 PWA 聊天</small></span>
+            <span class="mcp-button-chevron">›</span>
+          </button>
+          <button type="button" id="mcp-background-status-btn" class="mcp-connection-button">
+            <span class="mcp-button-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M22 19V3"/></svg>
+            </span>
+            <span class="mcp-button-copy"><strong>后台副本状态</strong><small>查看角色数量、上下文与待回传消息</small></span>
+            <span class="mcp-button-chevron">›</span>
+          </button>
+        </div>
+        <div class="settings-desc mcp-bottom-desc"><span class="mcp-state-dot"></span>尚未测试连接</div>
       </div>
     </div>
+
     <div id="preset-editor-screen" class="screen">
       <div class="header"> <span class="back-btn" onclick="showScreen('preset-screen')">‹</span> <span id="preset-editor-title"data-lang-key="presetEditorTitle">编辑预设</span> <span class="save-btn" id="save-preset-btn"data-lang-key="save">保存</span> </div>
       <div class="form-container">
