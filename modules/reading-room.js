@@ -623,7 +623,9 @@
             top: windowEl.style.top,
             left: windowEl.style.left
           };
-          saveChatsToIndexedDB();
+          window.db?.chats?.put({ ...chat }).catch(error => {
+            console.error('[一起看电影] 保存聊天设置失败：', error);
+          });
         }
       }
 

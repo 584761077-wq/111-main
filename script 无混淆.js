@@ -77107,6 +77107,10 @@ ${truthGameHistoryContext}
 
       document.getElementById('watch-together-modal').classList.add('visible');
       document.getElementById('watch-together-chat-name').textContent = chat.name;
+      const pipShell = document.getElementById('watch-together-pip-shell');
+      const pipBar = document.getElementById('watch-together-pip-bar');
+      if (pipShell) pipShell.classList.remove('is-visible', 'is-collapsed');
+      if (pipBar) pipBar.classList.remove('is-visible', 'is-left', 'is-right');
 
       // 加载保存的设置
       if (chat.watchTogetherSettings) {
@@ -77134,6 +77138,23 @@ ${truthGameHistoryContext}
       }, 100);
 
       renderWatchTogetherMessages();
+    });
+
+    // 悬浮播放
+    document.getElementById('watch-together-pip-btn').addEventListener('click', () => {
+      showWatchTogetherPiP();
+    });
+
+    document.getElementById('watch-together-pip-collapse-btn').addEventListener('click', () => {
+      collapseWatchTogetherPiP('right');
+    });
+
+    document.getElementById('watch-together-pip-bar').addEventListener('click', () => {
+      expandWatchTogetherPiP();
+    });
+
+    document.getElementById('watch-together-pip-back-btn').addEventListener('click', () => {
+      expandWatchTogetherPiP();
     });
 
     // 关闭观影界面
@@ -77330,6 +77351,61 @@ ${truthGameHistoryContext}
       }
     });
 
+    function showWatchTogetherPiP() {
+      const shell = document.getElementById('watch-together-pip-shell');
+      const bar = document.getElementById('watch-together-pip-bar');
+      const video = document.getElementById('watch-together-video');
+      const pipBody = document.getElementById('watch-together-pip-body');
+      const pipPlaceholder = document.getElementById('watch-together-pip-placeholder');
+      const title = document.getElementById('watch-together-pip-title');
+      const barTitle = document.getElementById('watch-together-pip-bar-title');
+      const modal = document.getElementById('watch-together-modal');
+      if (!shell || !bar || !video || !pipBody || !modal) return false;
+
+      if (video.parentElement !== pipBody) {
+        pipBody.insertBefore(video, pipPlaceholder);
+      }
+      shell.style.display = 'block';
+      shell.style.visibility = 'visible';
+      shell.style.opacity = '1';
+      shell.style.pointerEvents = 'auto';
+      shell.classList.add('is-visible');
+      shell.classList.remove('is-collapsed');
+      bar.classList.remove('is-visible', 'is-left', 'is-right');
+      title.textContent = video.dataset.title || '一起看电影';
+      barTitle.textContent = video.dataset.title ? `正在一起看：${video.dataset.title}` : '正在一起看';
+      pipPlaceholder.style.display = video.src || video.currentSrc ? 'none' : 'grid';
+      modal.classList.remove('visible');
+      document.getElementById('watch-together-chat-float').style.display = 'none';
+      return true;
+    }
+
+    window.showWatchTogetherPiP = showWatchTogetherPiP;
+
+    function collapseWatchTogetherPiP(side = 'right') {
+      const shell = document.getElementById('watch-together-pip-shell');
+      const bar = document.getElementById('watch-together-pip-bar');
+      if (!shell || !bar) return;
+      shell.classList.add('is-collapsed');
+      shell.classList.remove('is-visible');
+      shell.style.display = 'none';
+      bar.classList.add('is-visible');
+      bar.classList.toggle('is-left', side === 'left');
+      bar.classList.toggle('is-right', side !== 'left');
+    }
+
+    function expandWatchTogetherPiP() {
+      const shell = document.getElementById('watch-together-pip-shell');
+      const bar = document.getElementById('watch-together-pip-bar');
+      if (!shell || !bar) return;
+      shell.classList.remove('is-collapsed');
+      shell.classList.add('is-visible');
+      shell.style.display = 'block';
+      bar.classList.remove('is-visible', 'is-left', 'is-right');
+      document.getElementById('watch-together-modal').classList.add('visible');
+      document.getElementById('watch-together-chat-float').style.display = '';
+    }
+
     // 加载视频（本地文件）
     function loadWatchTogetherVideo(file, skipSavePrompt = false) {
       const video = document.getElementById('watch-together-video');
@@ -77349,6 +77425,7 @@ ${truthGameHistoryContext}
 
       // 开始监听
       startWatchTogetherMonitoring();
+      showWatchTogetherPiP();
 
       addWatchTogetherSystemMessage('视频已加载，开始观看');
 
@@ -77419,19 +77496,10 @@ ${truthGameHistoryContext}
           video.play().catch(() => {});
         }, { once: true });
       } else {
-        // 普通视频文件（mp4 等）
-        video.crossOrigin = 'anonymous';
+        // 普通视频文件（mp4 等）无需跨域读取画面，避免无 CORS 响应头的播放源被拦截。
+        video.removeAttribute('crossorigin');
+        video.onerror = null;
         video.src = url;
-
-        // 如果设置 crossOrigin 后加载失败，去掉 crossOrigin 重试
-        video.onerror = () => {
-          if (video.crossOrigin) {
-            console.warn('[一起看电影] 跨域加载失败，去掉 crossOrigin 重试');
-            video.removeAttribute('crossorigin');
-            video.src = url;
-            video.onerror = null; // 避免无限重试
-          }
-        };
       }
 
       // 开始监听

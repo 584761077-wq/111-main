@@ -135,7 +135,7 @@
   <script src="helper-assistant.js?v=0.0.36" defer></script>
   <script src="force-update.js?v=0.0.36" defer></script>
   <script src="modules/floating-ball.js?v=0.0.36" defer></script>
-  <script src="modules/watch-together-mini-player.js?v=0.0.36" defer></script>
+  <script src="modules/watch-together-pip.js?v=0.0.37" defer></script>
   
   <!-- 保活音频播放器样式（从内联 style 拆分） -->
   <link rel="stylesheet" href="css/keep-alive-player.css?v=0.0.36">
@@ -3432,25 +3432,20 @@
       <div id="chat-messages">
         <div id="typing-indicator">对方正在输入...</div>
       </div>
-      <div id="watch-together-mini-player" class="watch-together-mini-player" aria-live="polite">
-        <div class="watch-together-mini-player__stage">
-          <video id="watch-together-mini-video" playsinline webkit-playsinline preload="metadata"></video>
-          <div class="watch-together-mini-player__empty">选择影片后将在这里播放</div>
+      <div id="watch-together-pip-shell" class="watch-together-pip-shell" aria-hidden="true">
+        <div class="watch-together-pip-shell__header">
+          <span id="watch-together-pip-title">一起看电影</span>
+          <div class="watch-together-pip-shell__actions">
+            <button id="watch-together-pip-back-btn" type="button" aria-label="回到一起看主页">⤢</button>
+            <button id="watch-together-pip-collapse-btn" type="button" aria-label="收起悬浮播放器">⌄</button>
+          </div>
         </div>
-        <div class="watch-together-mini-player__toolbar">
-          <button id="watch-together-mini-toggle" type="button" aria-label="播放或暂停">▶</button>
-          <span id="watch-together-mini-title">一起看电影</span>
-          <button id="watch-together-mini-collapse" type="button" aria-label="收起播放器">⌃</button>
+        <div class="watch-together-pip-shell__body" id="watch-together-pip-body">
+          <div id="watch-together-pip-placeholder">选择影片后将在这里播放</div>
         </div>
       </div>
-      <button id="watch-together-mini-bar" class="watch-together-mini-bar" type="button" aria-label="展开一起看播放器">
-        <span>▶</span><span id="watch-together-mini-bar-title">正在一起看</span>
-      </button>
-      <button id="return-to-latest-btn" style="display: none; position: absolute; bottom: 160px; right: 20px; z-index: 100; background-color: white; color: #333; border: none; border-radius: 50%; width: 40px; height: 40px; box-shadow: 0 2px 10px rgba(0,0,0,0.2); cursor: pointer; padding: 0; text-align: center;">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-top: 2px;">
-          <line x1="12" y1="5" x2="12" y2="19"></line>
-          <polyline points="19 12 12 19 5 12"></polyline>
-        </svg>
+      <button id="watch-together-pip-bar" class="watch-together-pip-bar" type="button" aria-label="展开悬浮播放器">
+        <span id="watch-together-pip-bar-title">正在一起看</span>
       </button>
       <div id="chat-input-area">
         <div id="chat-at-mention-popup" class="at-mention-popup"></div>
@@ -6806,6 +6801,7 @@
       <div id="watch-together-header">
         <span style="font-size: 16px; font-weight: 500;">一起看电影</span>
         <div style="display: flex; gap: 10px; align-items: center;">
+          <button id="watch-together-pip-btn" style="font-size: 16px;" onclick="return window.showWatchTogetherPiP ? window.showWatchTogetherPiP() : false;">悬浮</button>
           <button id="watch-together-playlist-btn" style="font-size: 16px;">播放列表</button>
           <button id="watch-together-settings-btn" style="font-size: 16px;">设置</button>
           <button id="watch-together-upload-btn" style="font-size: 20px; font-weight: bold;">+</button>
