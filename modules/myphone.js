@@ -49,9 +49,9 @@
       const screen = document.getElementById(screenId);
       if (!screen) return;
       const headerActions = screen.querySelector('.header .header-actions');
-      if (!headerActions) return;
+      if (!headerActions || headerActions.querySelector(':scope > .myphone-dropdown-container')) return;
 
-      const actionBtns = Array.from(headerActions.querySelectorAll('.action-btn'));
+      const actionBtns = Array.from(headerActions.querySelectorAll(':scope > .action-btn'));
       // 如果有多于2个按钮，合并为下拉菜单
       if (actionBtns.length >= 2) {
         const dropdownContainer = document.createElement('div');
