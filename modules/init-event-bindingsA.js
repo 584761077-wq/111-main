@@ -1340,7 +1340,10 @@ window.initEventBindingsA = async function(state, db) {
       const typingIndicator = document.getElementById('typing-indicator');
       if (typingIndicator) typingIndicator.style.display = 'none';
 
-      // G. 核心：解除当前聊天绑定
+      // G. 移除聊天页面的消息节点及其媒体引用，避免隐藏页面继续占用内存
+      if (typeof disposeChatMessageDom === 'function') disposeChatMessageDom();
+
+      // H. 核心：解除当前聊天绑定
       state.activeChatId = null;
     }
 

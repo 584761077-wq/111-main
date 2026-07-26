@@ -6,6 +6,25 @@
 // 从 script.js 第 10276~10560 + 12670~13710 行拆分
 // ============================================================
 
+  let chatRenderVersion = 0;
+
+  function disposeChatMessageDom() {
+    chatRenderVersion++;
+    const messagesContainer = document.getElementById('chat-messages');
+    if (!messagesContainer) return;
+
+    messagesContainer.querySelectorAll('img, video, audio').forEach(media => {
+      media.onload = null;
+      media.onerror = null;
+      if (media.tagName !== 'IMG') {
+        try { media.pause(); } catch (e) {}
+        media.removeAttribute('src');
+        if (media.load) media.load();
+      }
+    });
+    messagesContainer.replaceChildren();
+  }
+
   // 根据本名查找显示名称（非群聊场景）
   function getDisplayNameByOriginalName(nameIdentifier) {
     if (!nameIdentifier) return '';
@@ -313,7 +332,9 @@
       }
     }
 
-    messagesContainer.innerHTML = '';
+    chatRenderVersion++;
+    const renderVersion = chatRenderVersion;
+    messagesContainer.replaceChildren();
     const history = chat.history;
     currentRenderedCount = 0;
     const renderWindow = state.globalSettings.chatRenderWindow || 50;
@@ -344,6 +365,7 @@
     }
 
 
+    if (renderVersion !== chatRenderVersion || state.activeChatId !== chatId) return;
     messagesContainer.appendChild(fragment);
 
     currentRenderedCount = initialMessages.length;
@@ -369,15 +391,19 @@
 
 
     Promise.all(imageLoadPromises).then(() => {
-
+      if (renderVersion !== chatRenderVersion || state.activeChatId !== chatId) return;
       messagesContainer.scrollTop = messagesContainer.scrollHeight;
       console.log('所有初始图片加载完成，已滚动到底部。');
     }).catch(err => {
-
+      if (renderVersion !== chatRenderVersion || state.activeChatId !== chatId) return;
       console.error("等待图片加载时出错:", err);
       messagesContainer.scrollTop = messagesContainer.scrollHeight;
     });
-    setTimeout(() => messagesContainer.scrollTop = messagesContainer.scrollHeight, 0);
+    setTimeout(() => {
+      if (renderVersion === chatRenderVersion && state.activeChatId === chatId) {
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+      }
+    }, 0);
   }
 
 
@@ -1422,7 +1448,10 @@
   async function appendMessage(msg, chat, isInitialLoad = false) {
 
     const messagesContainer = document.getElementById('chat-messages');
+    const renderVersion = chatRenderVersion;
+    if (!messagesContainer || state.activeChatId !== chat.id) return;
     const typingIndicator = document.getElementById('typing-indicator');
+    if (!typingIndicator) return;
 
     const lastMessage = chat.history.filter(m => !m.isHidden).pop();
 
@@ -1433,7 +1462,7 @@
     }
 
     const messageEl = await createMessageElement(msg, chat);
-    if (!messageEl) return;
+    if (!messageEl || renderVersion !== chatRenderVersion || state.activeChatId !== chat.id) return;
 
 
     if (msg.role === 'assistant' && !isInitialLoad) {
@@ -1616,6 +1645,7 @@
 
   // ========== 全局暴露 ==========
   window.renderChatInterface = renderChatInterface;
+  window.disposeChatMessageDom = disposeChatMessageDom;
   window.renderChatContext = renderChatContext;
   window.loadMoreMessages = loadMoreMessages;
   window.scrollToOriginalMessage = scrollToOriginalMessage;

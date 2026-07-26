@@ -40,7 +40,10 @@
 
 
 
+  let cphonePaginationSetupTimer = null;
+
   async function switchToCharacterPhone(characterId) {
+    if (cphonePaginationSetupTimer) clearTimeout(cphonePaginationSetupTimer);
     activeCharacterId = characterId;
     console.log(`已切换到角色 ${characterId} 的手机`);
 
@@ -54,15 +57,42 @@
     renderCharHomeScreen();
     showScreen('character-phone-screen');
 
-    // 初始化 CPhone 翻页功能
-    setTimeout(() => {
+    // 初始化 CPhone 翻页功能；切换角色前取消上一次尚未执行的初始化。
+    cphonePaginationSetupTimer = setTimeout(() => {
+      cphonePaginationSetupTimer = null;
       setupCPhonePagination();
     }, 100);
   }
 
 
 
+  function disposeCPhoneResources() {
+    const player = document.getElementById('char-audio-player');
+
+    if (charPlayerState.lrcUpdateInterval) {
+      clearInterval(charPlayerState.lrcUpdateInterval);
+      charPlayerState.lrcUpdateInterval = null;
+    }
+
+    if (player) {
+      player.pause();
+      player.onloadedmetadata = null;
+      if (player.dataset.objectUrl) {
+        URL.revokeObjectURL(player.dataset.objectUrl);
+        delete player.dataset.objectUrl;
+      }
+      player.removeAttribute('src');
+      player.load();
+    }
+  }
+
   function switchToMyPhone() {
+    if (cphonePaginationSetupTimer) {
+      clearTimeout(cphonePaginationSetupTimer);
+      cphonePaginationSetupTimer = null;
+    }
+    if (cphonePaginationCleanup) cphonePaginationCleanup();
+    disposeCPhoneResources();
     activeCharacterId = null;
     console.log("已返回我的手机");
     showScreen('home-screen');
@@ -283,9 +313,50 @@
     // 阻止事件冒泡
     if (window.event) window.event.stopPropagation();
   }
+  let cphoneConversationRenderVersion = 0;
+
+  function disposeCPhoneConversationDom() {
+    cphoneConversationRenderVersion++;
+    isLoadingMoreCphoneMessages = false;
+    const container = document.getElementById('char-conversation-messages');
+    if (!container) return;
+
+    container.querySelectorAll('img, video, audio').forEach(media => {
+      media.onload = null;
+      media.onerror = null;
+      if (media.tagName !== 'IMG') {
+        try { media.pause(); } catch (e) {}
+        media.removeAttribute('src');
+        if (media.load) media.load();
+      }
+    });
+    container.replaceChildren();
+    cphoneRenderedCount = 0;
+  }
+
   function switchToCharScreen(screenId) {
-    document.querySelectorAll('.char-screen').forEach(s => s.classList.remove('active'));
-    document.getElementById(screenId).classList.add('active');
+    const currentScreen = document.querySelector('.char-screen.active');
+    if (currentScreen?.id === 'char-qq-conversation-screen' && screenId !== 'char-qq-conversation-screen') {
+      disposeCPhoneConversationDom();
+    }
+
+    document.querySelectorAll('.char-screen').forEach(screen => {
+      screen.classList.remove('active');
+      screen.style.opacity = '0';
+      screen.style.visibility = 'hidden';
+      screen.style.zIndex = '';
+    });
+
+    const screenToShow = document.getElementById(screenId);
+    if (!screenToShow) return;
+    screenToShow.style.transition = 'none';
+    screenToShow.style.opacity = '1';
+    screenToShow.style.visibility = 'visible';
+    screenToShow.style.zIndex = '2';
+    screenToShow.classList.add('active');
+    requestAnimationFrame(() => {
+      if (screenToShow.classList.contains('active')) screenToShow.style.transition = '';
+    });
   }
 
   window.switchToCharScreen = switchToCharScreen;
@@ -645,8 +716,10 @@
   // CPhone 翻页功能
   let cphoneCurrentPage = 0;
   const cphoneTotalPages = 2;
+  let cphonePaginationCleanup = null;
 
   function setupCPhonePagination() {
+    if (cphonePaginationCleanup) cphonePaginationCleanup();
     const pagesContainer = document.getElementById('cphone-pages-container');
     const pages = document.getElementById('cphone-pages');
     const dots = document.querySelectorAll('.cphone-pagination-dot');
@@ -739,12 +812,23 @@
     pagesContainer.addEventListener('touchend', onDragEnd);
 
     // 点击指示器切换页面
-    dots.forEach((dot, index) => {
-      dot.addEventListener('click', () => {
-        cphoneCurrentPage = index;
-        updatePagination();
-      });
+    const dotHandlers = dots.map((dot, index) => () => {
+      cphoneCurrentPage = index;
+      updatePagination();
     });
+    dots.forEach((dot, index) => dot.addEventListener('click', dotHandlers[index]));
+
+    cphonePaginationCleanup = () => {
+      pagesContainer.removeEventListener('mousedown', onDragStart);
+      pagesContainer.removeEventListener('mousemove', onDragMove);
+      pagesContainer.removeEventListener('mouseup', onDragEnd);
+      pagesContainer.removeEventListener('mouseleave', onDragEnd);
+      pagesContainer.removeEventListener('touchstart', onDragStart);
+      pagesContainer.removeEventListener('touchmove', onDragMove);
+      pagesContainer.removeEventListener('touchend', onDragEnd);
+      dots.forEach((dot, index) => dot.removeEventListener('click', dotHandlers[index]));
+      cphonePaginationCleanup = null;
+    };
 
     updatePagination();
   }
@@ -1489,9 +1573,11 @@ ${recentHistoryWithUser}
 
 
   async function renderCharSimulatedQQ() {
+    const renderVersion = ++cphoneConversationRenderVersion;
+    const renderedCharacterId = activeCharacterId;
     const listEl = document.getElementById('char-chat-list');
-    listEl.innerHTML = '';
-    const char = state.chats[activeCharacterId];
+    listEl.replaceChildren();
+    const char = state.chats[renderedCharacterId];
     if (!char) return;
 
 
@@ -1544,6 +1630,7 @@ ${recentHistoryWithUser}
 
 
     const allNpcs = await db.npcs.toArray();
+    if (renderVersion !== cphoneConversationRenderVersion || activeCharacterId !== renderedCharacterId || !document.getElementById('char-qq-screen').classList.contains('active')) return;
     const npcMap = new Map(allNpcs.map(npc => [npc.name, npc]));
     const conversations = char.simulatedConversations || [];
 
@@ -2145,13 +2232,14 @@ ${historySlice.map(msg => `${msg.role === 'user' ? myNickname : chat.name}: ${St
   }
 
   async function openCharSimulatedConversation(conversationIndex) {
-    const mainChar = state.chats[activeCharacterId];
+    const openedCharacterId = activeCharacterId;
+    const mainChar = state.chats[openedCharacterId];
     if (!mainChar) return;
 
-    cphoneActiveConversationType = (conversationIndex === -1) ? 'private_user' : mainChar.simulatedConversations[conversationIndex]?.type;
-
     const bodyEl = document.getElementById('char-conversation-messages');
-    bodyEl.innerHTML = '';
+    disposeCPhoneConversationDom();
+    const renderVersion = ++cphoneConversationRenderVersion;
+    cphoneActiveConversationType = (conversationIndex === -1) ? 'private_user' : mainChar.simulatedConversations[conversationIndex]?.type;
     bodyEl.dataset.theme = mainChar.settings.theme || 'default';
     const isDarkMode = document.getElementById('phone-screen').classList.contains('dark-mode');
     bodyEl.style.backgroundColor = isDarkMode ? '#000000' : '#f0f2f5';
@@ -2159,6 +2247,7 @@ ${historySlice.map(msg => `${msg.role === 'user' ? myNickname : chat.name}: ${St
     let tempChatObjectForRendering;
     let messagesToRender = [];
     const allNpcs = await db.npcs.toArray();
+    if (renderVersion !== cphoneConversationRenderVersion || activeCharacterId !== openedCharacterId) return;
     const npcMap = new Map(allNpcs.map(npc => [npc.name, npc]));
 
     if (conversationIndex === -1) {
@@ -2263,6 +2352,7 @@ ${historySlice.map(msg => `${msg.role === 'user' ? myNickname : chat.name}: ${St
 
 
     for (const msg of messagesToRender) {
+      if (renderVersion !== cphoneConversationRenderVersion || activeCharacterId !== openedCharacterId) return;
       let role = msg.role;
       if (conversationIndex !== -1) {
         const isFromMainChar = msg.sender === (mainChar.originalName || mainChar.name);
@@ -2296,13 +2386,19 @@ ${historySlice.map(msg => `${msg.role === 'user' ? myNickname : chat.name}: ${St
       }
 
       const bubbleElement = await createMessageElement(tempMessageObject, tempChatObjectForRendering);
+      if (renderVersion !== cphoneConversationRenderVersion || activeCharacterId !== openedCharacterId) return;
       if (bubbleElement) {
         bodyEl.appendChild(bubbleElement);
       }
     }
 
+    if (renderVersion !== cphoneConversationRenderVersion || activeCharacterId !== openedCharacterId) return;
     switchToCharScreen('char-qq-conversation-screen');
-    setTimeout(() => bodyEl.scrollTop = bodyEl.scrollHeight, 0); // 渲染完成后滚动到底部
+    setTimeout(() => {
+      if (renderVersion === cphoneConversationRenderVersion && activeCharacterId === openedCharacterId) {
+        bodyEl.scrollTop = bodyEl.scrollHeight;
+      }
+    }, 0);
   }
 
   function closeSimulatedTranscriptModal() {
@@ -4685,7 +4781,14 @@ ${recentHistory}
     const player = document.getElementById('char-audio-player');
     const modal = document.getElementById('char-music-player-modal');
 
-    if (charPlayerState.lrcUpdateInterval) clearInterval(charPlayerState.lrcUpdateInterval);
+    if (charPlayerState.lrcUpdateInterval) {
+      clearInterval(charPlayerState.lrcUpdateInterval);
+      charPlayerState.lrcUpdateInterval = null;
+    }
+    if (player.dataset.objectUrl) {
+      URL.revokeObjectURL(player.dataset.objectUrl);
+      delete player.dataset.objectUrl;
+    }
     player.pause();
 
 
@@ -4712,7 +4815,9 @@ ${recentHistory}
       const blob = new Blob([songObject.src], {
         type: songObject.fileType || 'audio/mpeg'
       });
-      player.src = URL.createObjectURL(blob);
+      const objectUrl = URL.createObjectURL(blob);
+      player.src = objectUrl;
+      player.dataset.objectUrl = objectUrl;
     } else {
       player.src = songObject.src;
     }
@@ -4747,9 +4852,18 @@ ${recentHistory}
     const modal = document.getElementById('char-music-player-modal');
     const player = document.getElementById('char-audio-player');
 
-    if (charPlayerState.lrcUpdateInterval) clearInterval(charPlayerState.lrcUpdateInterval);
+    if (charPlayerState.lrcUpdateInterval) {
+      clearInterval(charPlayerState.lrcUpdateInterval);
+      charPlayerState.lrcUpdateInterval = null;
+    }
     player.pause();
-    // player.src = ''; // 建议注释掉这行，防止下次打开要重新加载，或者保留看你需求
+    player.onloadedmetadata = null;
+    if (player.dataset.objectUrl) {
+      URL.revokeObjectURL(player.dataset.objectUrl);
+      delete player.dataset.objectUrl;
+    }
+    player.removeAttribute('src');
+    player.load();
 
     modal.classList.remove('visible');
     charPlayerState.isPlaying = false;
@@ -4927,6 +5041,7 @@ ${recentHistory}
   }
 
   // ========== 全局暴露 ==========
+  window.disposeCPhoneResources = disposeCPhoneResources;
   window.renderCharAlbum = renderCharAlbum;
   window.renderCharTaobao = renderCharTaobao;
   window.renderCharAppUsage = renderCharAppUsage;
