@@ -10,8 +10,8 @@
 // ============================================================
 
 window.initFeatures = function(state, db) {
-
-
+    if (window.__initFeaturesReady) return;
+    window.__initFeaturesReady = true;
 
     document.getElementById('test-sound-btn').addEventListener('click', () => {
       const player = document.getElementById('notification-sound-player');

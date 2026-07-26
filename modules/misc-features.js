@@ -6,6 +6,15 @@
 
   let isAddingNpcToGroup = false;
 
+  function bindSingleClickHandler(element, handler) {
+    if (!element) return;
+    if (element.__boundSingleClickHandler) {
+      element.removeEventListener('click', element.__boundSingleClickHandler);
+    }
+    element.__boundSingleClickHandler = handler;
+    element.addEventListener('click', handler);
+  }
+
   function showPostActions(postId) {
     activePostId = postId;
     document.getElementById('post-actions-modal').classList.add('visible');
@@ -83,7 +92,7 @@
     setTimeout(() => {
       const shuoshuoBtn = document.querySelector('#custom-modal-body .format-btn[data-type="text"]');
       if (shuoshuoBtn) {
-        shuoshuoBtn.addEventListener('click', () => {
+        bindSingleClickHandler(shuoshuoBtn, () => {
           const input = document.getElementById('custom-prompt-input');
           input.value = templates.shuoshuo;
           input.focus();
@@ -170,9 +179,7 @@
 
       selectedContacts.clear();
       const confirmBtn = document.getElementById('confirm-contact-picker-btn');
-      const newConfirmBtn = confirmBtn.cloneNode(true);
-      confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
-      newConfirmBtn.addEventListener('click', handleCreateGroup);
+      bindSingleClickHandler(confirmBtn, handleCreateGroup);
       await renderContactPicker();
       showScreen('contact-picker-screen');
 
@@ -195,9 +202,7 @@
 
 
     const confirmBtn = document.getElementById('confirm-contact-picker-btn');
-    const newConfirmBtn = confirmBtn.cloneNode(true);
-    confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
-    newConfirmBtn.addEventListener('click', handleCreateSpectatorGroup);
+    bindSingleClickHandler(confirmBtn, handleCreateSpectatorGroup);
 
 
     await renderSpectatorContactPicker();
@@ -211,9 +216,7 @@
     selectedContacts.clear();
 
     const confirmBtn = document.getElementById('confirm-contact-picker-btn');
-    const newConfirmBtn = confirmBtn.cloneNode(true);
-    confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
-    newConfirmBtn.addEventListener('click', handleCreateSpectatorGroup);
+    bindSingleClickHandler(confirmBtn, handleCreateSpectatorGroup);
 
     await renderSpectatorContactPicker();
 
@@ -1084,12 +1087,7 @@
       });
     }
 
-    const newDeleteBtn = deleteBtn.cloneNode(true);
-    deleteBtn.parentNode.replaceChild(newDeleteBtn, deleteBtn);
-    const newSummarizeBtn = summarizeBtn.cloneNode(true);
-    summarizeBtn.parentNode.replaceChild(newSummarizeBtn, summarizeBtn);
-
-    newDeleteBtn.addEventListener('click', async () => {
+    bindSingleClickHandler(deleteBtn, async () => {
       const confirmed = await showCustomConfirm(
         "确认删除", "确定要永久删除这条通话记录吗？此操作不可恢复。", {
         confirmButtonClass: 'btn-danger'
@@ -1105,7 +1103,7 @@
 
 
 
-    newSummarizeBtn.addEventListener('click', async () => {
+    bindSingleClickHandler(summarizeBtn, async () => {
 
       const confirmed = await showCustomConfirm(
         '确认操作',
@@ -1146,10 +1144,7 @@
 
 
     const closeBtn = document.getElementById('close-transcript-modal-btn');
-    const newCloseBtn = closeBtn.cloneNode(true);
-    closeBtn.parentNode.replaceChild(newCloseBtn, closeBtn);
-
-    newCloseBtn.addEventListener('click', () => {
+    bindSingleClickHandler(closeBtn, () => {
       modal.classList.remove('visible');
     });
 
@@ -3789,14 +3784,10 @@
     avatarEl.textContent = email.sender.charAt(0).toUpperCase();
     document.getElementById('mail-detail-body').innerHTML = email.content.replace(/\n/g, '<br>');
     const forwardBtn = document.getElementById('forward-email-btn');
-    const newForwardBtn = forwardBtn.cloneNode(true);
-    forwardBtn.parentNode.replaceChild(newForwardBtn, forwardBtn);
-    newForwardBtn.onclick = () => forwardEmailToChat(email);
+    bindSingleClickHandler(forwardBtn, () => forwardEmailToChat(email));
     const deleteBtn = document.getElementById('delete-email-btn');
     if (deleteBtn) {
-      const newDeleteBtn = deleteBtn.cloneNode(true);
-      deleteBtn.parentNode.replaceChild(newDeleteBtn, deleteBtn);
-      newDeleteBtn.onclick = () => deleteCurrentEmail();
+      bindSingleClickHandler(deleteBtn, () => deleteCurrentEmail());
     }
     showScreen('email-detail-screen');
   }

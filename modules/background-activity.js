@@ -6,6 +6,13 @@
 //       startBackgroundKeepAlive, stopBackgroundKeepAlive, handleVisibilityChange,
 //       bindBackgroundKeepAliveEvents, loadBackgroundKeepAliveSettings
 
+  window.__backgroundActivityState = window.__backgroundActivityState || {
+    keepAliveEventsBound: false,
+    smartKeepAliveEnabled: false,
+    keepAliveStarted: false,
+    bootstrapBound: false
+  };
+
   function startBackgroundSimulation() {
     if (simulationIntervalId) return;
     const intervalSeconds = state.globalSettings.backgroundActivityInterval || 60;
@@ -387,14 +394,20 @@ ${tasksString}
         enabled: false
       };
     }
+    window.__backgroundActivityState.keepAliveSettingsInitialized = true;
   }
 
   // ==== 无声智能保活策略开始 ====
 
   // 启动无声智能保活
   async function startSmartKeepAlive() {
+    if (!window.__backgroundActivityState.keepAliveSettingsInitialized) {
+      await initializeBackgroundKeepAlive();
+    }
+    if (window.__backgroundActivityState.smartKeepAliveEnabled) return;
     console.log('[无声保活] 启动无声智能保活...');
     smartKeepAliveEnabled = true;
+    window.__backgroundActivityState.smartKeepAliveEnabled = true;
     
     // 1. Android WakeLock 策略
     if ('wakeLock' in navigator) {
@@ -451,6 +464,7 @@ ${tasksString}
   function stopSmartKeepAlive() {
     console.log('[无声保活] 停止无声智能保活...');
     smartKeepAliveEnabled = false;
+    window.__backgroundActivityState.smartKeepAliveEnabled = false;
 
     // 释放 WakeLock
     if (smartKeepAliveWakeLock !== null) {
@@ -521,7 +535,12 @@ ${tasksString}
 
   // 启动音频后台保活
   async function startBackgroundKeepAlive() {
+    if (!window.__backgroundActivityState.keepAliveSettingsInitialized) {
+      await initializeBackgroundKeepAlive();
+    }
+    if (window.__backgroundActivityState.keepAliveStarted) return;
     console.log('[后台保活] 启动后台保活（音频播放器模式）...');
+    window.__backgroundActivityState.keepAliveStarted = true;
 
     // 显示保活音频配置按钮
     const audioBtnContainer = document.getElementById('keep-alive-audio-btn-container');
@@ -542,6 +561,7 @@ ${tasksString}
   // 停止后台保活
   function stopBackgroundKeepAlive() {
     console.log('[后台保活] 停止后台保活...');
+    window.__backgroundActivityState.keepAliveStarted = false;
 
     // 停止音频播放器并隐藏按钮
     const audioBtnContainer = document.getElementById('keep-alive-audio-btn-container');
@@ -621,6 +641,9 @@ ${tasksString}
 
   // 绑定后台保活开关事件
   function bindBackgroundKeepAliveEvents() {
+    if (window.__backgroundActivityState.keepAliveEventsBound) return;
+    window.__backgroundActivityState.keepAliveEventsBound = true;
+
     const smartKeepAliveSwitch = document.getElementById('smart-keep-alive-switch');
     const keepAliveSwitch = document.getElementById('background-keep-alive-switch');
     const statusDiv = document.getElementById('keep-alive-status');
@@ -803,6 +826,9 @@ ${tasksString}
 
   // 加载后台保活设置到UI
   function loadBackgroundKeepAliveSettings() {
+    if (!window.__backgroundActivityState.keepAliveSettingsInitialized) {
+      window.__backgroundActivityState.keepAliveSettingsInitialized = true;
+    }
     const smartConfig = state.globalSettings.smartKeepAlive;
     const config = state.globalSettings.backgroundKeepAlive;
 

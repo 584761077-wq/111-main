@@ -14,7 +14,9 @@
 //   - init-features.js（功能模块后半段）
 // ============================================================
 
-document.addEventListener('DOMContentLoaded', () => {
+if (!window.__appBootstrapStarted) {
+  window.__appBootstrapStarted = true;
+  document.addEventListener('DOMContentLoaded', () => {
 
   // ========================================
   // References to globals from split files
@@ -546,6 +548,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
   async function init() {
+    if (window.__appInitCompleted || window.__appInitInProgress) return;
+    window.__appInitInProgress = true;
 
     // ==================== Event Bindings A (from init-event-bindingsA.js) ====================
     await window.initEventBindingsA(state, db);
@@ -561,7 +565,7 @@ document.addEventListener('DOMContentLoaded', () => {
     checkForUpdates();
     updateLockedFeatureUI();
     initSystemNotification();
-    initializeBackgroundKeepAlive();
+    await initializeBackgroundKeepAlive();
     bindBackgroundKeepAliveEvents();
     loadBackgroundKeepAliveSettings();
     loadShoppingCart(); // 加载购物车数据
@@ -572,8 +576,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     showScreen('home-screen');
+    window.__appInitCompleted = true;
+    window.__appInitInProgress = false;
   }
 
   init();
 
-});
+  });
+}

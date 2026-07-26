@@ -10,6 +10,8 @@
 // ============================================================
 
 window.initEventBindingsB = function(state, db) {
+    if (window.__initEventBindingsBReady) return;
+    window.__initEventBindingsBReady = true;
     // 从 window 获取全局变量
     const audioPlayer = window.audioPlayer;
     const musicState = window.musicState;
