@@ -52,7 +52,21 @@ database.exec(`
   );
   CREATE TABLE IF NOT EXISTS secure_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS push_subscriptions (endpoint TEXT PRIMARY KEY, subscription TEXT NOT NULL, created_at TEXT NOT NULL, last_success_at TEXT);
+  CREATE TABLE IF NOT EXISTS runtime_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    message TEXT NOT NULL
+  );
 `);
+
+function writeRuntimeLog(type, status, message) {
+  const createdAt = new Date().toISOString();
+  database.prepare('INSERT INTO runtime_logs (created_at, type, status, message) VALUES (?, ?, ?, ?)')
+    .run(createdAt, String(type).slice(0, 40), String(status).slice(0, 20), String(message).slice(0, 1000));
+  database.prepare('DELETE FROM runtime_logs WHERE id NOT IN (SELECT id FROM runtime_logs ORDER BY id DESC LIMIT 1000)').run();
+}
 
 function encryptSecret(value) {
   if (!CREDENTIAL_SECRET) throw new Error('服务器未配置 MCP_CREDENTIAL_SECRET');
@@ -124,11 +138,15 @@ migrateBackgroundJson();
 
 async function sendPush(payload) {
   const rows = database.prepare('SELECT endpoint, subscription FROM push_subscriptions').all();
+  let sent = 0;
+  let failed = 0;
   for (const row of rows) {
     try {
       await webpush.sendNotification(JSON.parse(row.subscription), JSON.stringify(payload), { TTL: 3600 });
       database.prepare('UPDATE push_subscriptions SET last_success_at = ? WHERE endpoint = ?').run(new Date().toISOString(), row.endpoint);
+      sent += 1;
     } catch (error) {
+      failed += 1;
       if (error.statusCode === 404 || error.statusCode === 410) {
         database.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(row.endpoint);
       } else {
@@ -136,6 +154,7 @@ async function sendPush(payload) {
       }
     }
   }
+  return { total: rows.length, sent, failed };
 }
 
 async function generateBackgroundMessage(row) {
@@ -262,12 +281,26 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && url.pathname === '/api/status') {
       const config = getConfig();
+      writeRuntimeLog('connection', 'success', '后端连接成功');
       return json(res, 200, {
         ok: true,
         configured: Boolean(config),
         state: config ? 'configured' : 'waiting_for_config',
         configUpdatedAt: config?.updatedAt || null
       });
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/logs') {
+      const afterId = Math.max(0, Number(url.searchParams.get('afterId')) || 0);
+      const limit = Math.min(200, Math.max(1, Number(url.searchParams.get('limit')) || 100));
+      const logs = database.prepare(`SELECT id, created_at AS createdAt, type, status, message
+        FROM runtime_logs WHERE id > ? ORDER BY id DESC LIMIT ?`).all(afterId, limit).reverse();
+      return json(res, 200, { ok: true, logs });
+    }
+
+    if (req.method === 'DELETE' && url.pathname === '/api/logs') {
+      database.prepare('DELETE FROM runtime_logs').run();
+      return json(res, 200, { ok: true });
     }
 
     if (req.method === 'GET' && url.pathname === '/api/server-config') {
@@ -279,6 +312,7 @@ const server = http.createServer(async (req, res) => {
       if (!config.host) return json(res, 400, { ok: false, error: '请填写 VPS IP 或域名' });
       if (!config.username) return json(res, 400, { ok: false, error: '请填写 SSH 用户名' });
       fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), { mode: 0o600 });
+      writeRuntimeLog('sync', 'success', `${config.name || '服务器'}配置同步成功`);
       return json(res, 200, { ok: true, config });
     }
 
@@ -333,7 +367,28 @@ const server = http.createServer(async (req, res) => {
       database.prepare(`INSERT INTO push_subscriptions (endpoint, subscription, created_at) VALUES (?, ?, ?)
         ON CONFLICT(endpoint) DO UPDATE SET subscription=excluded.subscription`)
         .run(subscription.endpoint, JSON.stringify(subscription), new Date().toISOString());
+      writeRuntimeLog('push', 'success', '推送订阅成功');
       return json(res, 200, { ok: true });
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/push/test') {
+      const body = await readBody(req);
+      const result = await sendPush({
+        title: String(body.title || 'Web Push 测试').slice(0, 100),
+        body: String(body.body || '测试推送已成功送达当前设备。').slice(0, 300),
+        tag: 'mcp-web-push-test',
+        data: { type: 'mcp-push-test', sentAt: new Date().toISOString() }
+      });
+      if (!result.total) {
+        writeRuntimeLog('push', 'failed', '测试推送失败：暂无推送订阅');
+        return json(res, 400, { ok: false, error: '暂无推送订阅，请先订阅当前设备' });
+      }
+      if (!result.sent) {
+        writeRuntimeLog('push', 'failed', `测试推送失败：${result.failed} 个订阅发送失败`);
+        return json(res, 502, { ok: false, error: '真实推送发送失败', ...result });
+      }
+      writeRuntimeLog('push', result.failed ? 'warning' : 'success', `测试推送成功：已发送 ${result.sent} 个订阅`);
+      return json(res, 200, { ok: true, ...result });
     }
 
     if (req.method === 'POST' && url.pathname === '/api/background/snapshots') {
@@ -363,6 +418,7 @@ const server = http.createServer(async (req, res) => {
         database.exec('ROLLBACK');
         throw error;
       }
+      writeRuntimeLog('sync', 'success', `角色后台数据同步成功：${incoming.length} 个角色`);
       return json(res, 200, { ok: true, saved: incoming.length, updatedAt: syncedAt });
     }
 
@@ -421,11 +477,13 @@ const server = http.createServer(async (req, res) => {
 
     return json(res, 404, { ok: false, error: '接口不存在' });
   } catch (error) {
+    writeRuntimeLog('request', 'failed', `${req.method} ${url.pathname}：${error.message || '请求处理失败'}`);
     return json(res, 400, { ok: false, error: error.message || '请求处理失败' });
   }
 });
 
 server.listen(PORT, '0.0.0.0', () => {
+  writeRuntimeLog('system', 'success', `MCP 后端已启动，监听端口 ${PORT}`);
   console.log(`EPhone MCP backend listening on http://0.0.0.0:${PORT}`);
   if (!API_TOKEN) console.warn('MCP_API_TOKEN 未设置，仅建议本地测试使用。');
 });

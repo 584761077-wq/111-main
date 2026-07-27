@@ -24,7 +24,7 @@
   <link rel="stylesheet" href="structured-memory.css?v=0.0.36">
   <link rel="stylesheet" href="vector-memory.css?v=0.0.36">
   <link rel="stylesheet" href="online-app.css?v=0.0.36">
-  <link rel="stylesheet" href="css/mcp-app.css?v=0.0.36">
+  <link rel="stylesheet" href="css/mcp-app.css?v=0.0.37">
   <link rel="stylesheet" href="period-tracker.css?v=0.0.36">
   <link rel="stylesheet" href="focus-timer.css?v=0.0.36">
   <link rel="stylesheet" href="extra.css?v=0.0.36">
@@ -139,7 +139,7 @@
   <script src="force-update.js?v=0.0.36" defer></script>
   <script src="modules/floating-ball.js?v=0.0.36" defer></script>
   <script src="modules/watch-together-pip.js?v=0.0.37" defer></script>
-  <script src="modules/mcp-app.js?v=0.0.36" defer></script>
+  <script src="modules/mcp-app.js?v=0.0.37" defer></script>
   <script src="modules/mcp-background-bridge.js?v=0.0.1" defer></script>
   
   <!-- 保活音频播放器样式（从内联 style 拆分） -->
@@ -1730,9 +1730,21 @@
             <div><div>允许 API 代理</div><div class="mcp-setting-note">仅在 PWA 直连遇到 CORS 时手动使用</div></div>
             <label class="toggle-switch"><input id="mcp-allow-proxy" type="checkbox"><span class="slider"></span></label>
           </div>
-          <div class="settings-item">
-            <div><div>同步聊天与记忆</div><div class="mcp-setting-note">默认关闭，开启后才同步至服务器</div></div>
+          <div class="settings-item" id="mcp-sync-data-row">
+            <div>
+              <div>同步聊天与记忆</div>
+              <div class="mcp-setting-note" id="mcp-sync-data-note">默认关闭，开启后才同步至服务器</div>
+            </div>
             <label class="toggle-switch"><input id="mcp-sync-data" type="checkbox"><span class="slider"></span></label>
+          </div>
+          <div class="mcp-sync-manual-wrap" id="mcp-sync-manual-wrap" hidden>
+            <button type="button" id="mcp-sync-config-btn" class="mcp-connection-button mcp-sync-manual-button">
+              <span class="mcp-button-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"/></svg>
+              </span>
+              <span class="mcp-button-copy"><strong>手动同步</strong><small id="mcp-sync-config-btn-copy">已启用自动同步</small></span>
+              <span class="mcp-button-chevron">›</span>
+            </button>
           </div>
           <div class="settings-item">
             <div><div>定时任务与推送</div><div class="mcp-setting-note">允许服务器保持后台运行</div></div>
@@ -1740,27 +1752,21 @@
           </div>
         </div>
 
-        <div class="settings-header">连接</div>
+        <div class="settings-header mcp-connection-header"><span>连接</span><button type="button" id="mcp-open-logs-btn" class="mcp-log-trigger">日志</button></div>
         <div class="settings-section mcp-connection-actions">
           <button type="button" id="mcp-test-connection-btn" class="mcp-connection-button mcp-test-button">
             <span class="mcp-button-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
             </span>
-            <span class="mcp-button-copy"><strong>测试连接</strong><small>验证后端服务与 API Token</small></span>
+            <span class="mcp-button-copy"><strong>连接</strong><small>填写配置后立即连接后端与 API Token</small></span>
             <span class="mcp-button-chevron">›</span>
           </button>
+          <div id="mcp-connection-status-pill" class="mcp-connection-pill is-unknown">未连接</div>
           <button type="button" id="mcp-save-config-btn" class="mcp-connection-button">
             <span class="mcp-button-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24"><path d="M5 4h12l2 2v14H5zM8 4v6h8V4M8 20v-6h8v6"/></svg>
             </span>
             <span class="mcp-button-copy"><strong>保存到 PWA</strong><small>只保存到当前设备，不依赖后端</small></span>
-            <span class="mcp-button-chevron">›</span>
-          </button>
-          <button type="button" id="mcp-sync-config-btn" class="mcp-connection-button mcp-save-button">
-            <span class="mcp-button-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"/></svg>
-            </span>
-            <span class="mcp-button-copy"><strong>同步扩展配置</strong><small>复制 PWA 后台配置与角色上下文</small></span>
             <span class="mcp-button-chevron">›</span>
           </button>
           <button type="button" id="mcp-authorize-api-btn" class="mcp-connection-button">
@@ -1771,22 +1777,54 @@
             <span class="mcp-button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg></span>
             <span class="mcp-button-copy"><strong>连接 Web Push</strong><small>上传当前 iOS PWA 的推送订阅</small></span><span class="mcp-button-chevron">›</span>
           </button>
-          <button type="button" id="mcp-pull-events-btn" class="mcp-connection-button">
-            <span class="mcp-button-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v6h-6"/></svg>
-            </span>
-            <span class="mcp-button-copy"><strong>拉取后台消息</strong><small>合并 VPS 消息到原 PWA 聊天</small></span>
-            <span class="mcp-button-chevron">›</span>
-          </button>
-          <button type="button" id="mcp-background-status-btn" class="mcp-connection-button">
-            <span class="mcp-button-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M22 19V3"/></svg>
-            </span>
-            <span class="mcp-button-copy"><strong>后台副本状态</strong><small>查看角色数量、上下文与待回传消息</small></span>
-            <span class="mcp-button-chevron">›</span>
-          </button>
         </div>
         <div class="settings-desc mcp-bottom-desc"><span class="mcp-state-dot"></span>尚未测试连接</div>
+      </div>
+
+      <div id="mcp-push-modal" class="mcp-push-modal" hidden role="dialog" aria-modal="true" aria-labelledby="mcp-push-title">
+        <div class="mcp-push-backdrop" data-mcp-close-push></div>
+        <section class="mcp-push-dialog">
+          <button type="button" class="mcp-push-close" data-mcp-close-push aria-label="关闭">×</button>
+          <h2 id="mcp-push-title">Web Push</h2>
+          <p>先订阅当前设备，再可进行测试推送</p>
+          <div id="mcp-push-status" class="mcp-push-status" aria-live="polite">等待操作</div>
+          <div class="mcp-push-actions">
+            <button type="button" id="mcp-push-subscribe-btn">推送订阅</button>
+            <button type="button" id="mcp-push-test-btn">测试推送</button>
+          </div>
+        </section>
+      </div>
+
+      <div id="mcp-push-modal" class="mcp-push-modal" hidden role="dialog" aria-modal="true" aria-labelledby="mcp-push-title">
+        <div class="mcp-push-backdrop" data-mcp-close-push></div>
+        <section class="mcp-push-dialog">
+          <button type="button" class="mcp-push-close" data-mcp-close-push aria-label="关闭">×</button>
+          <h2 id="mcp-push-title">Web Push</h2>
+          <p>先订阅当前设备，再可进行测试推送</p>
+          <div id="mcp-push-status" class="mcp-push-status" hidden aria-live="polite"></div>
+          <div class="mcp-push-actions">
+            <button type="button" id="mcp-push-subscribe-btn" class="mcp-push-action mcp-push-primary">推送订阅</button>
+            <button type="button" id="mcp-push-test-btn" class="mcp-push-action">测试推送</button>
+          </div>
+        </section>
+      </div>
+
+      <div id="mcp-logs-modal" class="mcp-logs-modal" hidden role="dialog" aria-modal="true" aria-labelledby="mcp-logs-title">
+        <div class="mcp-logs-backdrop" data-mcp-close-logs></div>
+        <section class="mcp-logs-sheet">
+          <div class="mcp-logs-handle" aria-hidden="true"></div>
+          <header class="mcp-logs-header">
+            <div><p class="mcp-logs-eyebrow">MCP 后端</p><h2 id="mcp-logs-title">运行日志</h2></div>
+            <button type="button" class="mcp-logs-close" data-mcp-close-logs aria-label="关闭日志">×</button>
+          </header>
+          <div class="mcp-log-toolbar"><span class="mcp-log-live-dot"></span><span id="mcp-log-live-label">实时日志</span><button type="button" id="mcp-log-clear-btn" class="mcp-log-clear">清空</button></div>
+          <div id="mcp-log-list" class="mcp-log-list" aria-live="polite"></div>
+          <div id="mcp-log-empty" class="mcp-log-empty">
+            <span class="mcp-log-empty-icon" aria-hidden="true">›_</span>
+            <strong>正在拉取真实日志</strong>
+            <p>将从当前填写的 MCP 后端加载运行记录。</p>
+          </div>
+        </section>
       </div>
     </div>
 

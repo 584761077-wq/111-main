@@ -139,10 +139,12 @@
   async function subscribePush() {
     const server = getActiveServer();
     if (!server?.backendUrl) throw new Error('请先选择 MCP 后端');
-    if (!('serviceWorker' in navigator) || !('PushManager' in window)) throw new Error('当前环境不支持 Web Push');
-    if (Notification.permission !== 'granted') throw new Error('请先在 PWA 中允许通知权限');
+    if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) throw new Error('当前环境不支持 Web Push');
+    let permission = Notification.permission;
+    if (permission === 'default') permission = await Notification.requestPermission();
+    if (permission !== 'granted') throw new Error(permission === 'denied' ? '通知权限已被拒绝，请在系统设置中开启' : '未获得通知权限');
     const keyResponse = await fetch(`${server.backendUrl}/api/push/vapid-public-key`, { headers: headers(server, false) });
-    const keyResult = await keyResponse.json();
+    const keyResult = await keyResponse.json().catch(() => ({}));
     if (!keyResponse.ok || !keyResult.publicKey) throw new Error(keyResult.error || '无法获取 VAPID 公钥');
     const registration = await navigator.serviceWorker.ready;
     let subscription = await registration.pushManager.getSubscription();
@@ -154,6 +156,19 @@
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok || result.ok === false) throw new Error(result.error || 'Push Subscription 上传失败');
+    return { ...result, endpoint: subscription.endpoint };
+  }
+
+  async function testPush() {
+    const server = getActiveServer();
+    if (!server?.backendUrl) throw new Error('请先选择 MCP 后端');
+    const response = await fetch(`${server.backendUrl}/api/push/test`, {
+      method: 'POST',
+      headers: headers(server, true),
+      body: JSON.stringify({ title: 'Web Push 测试', body: '当前设备已成功收到一条真实推送通知。' })
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || result.ok === false) throw new Error(result.error || '测试推送发送失败');
     return result;
   }
 
@@ -183,7 +198,8 @@
     pullEvents,
     importEvent,
     authorizeBackgroundApi,
-    subscribePush
+    subscribePush,
+    testPush
   };
 
   window.addEventListener('focus', () => pullEvents().catch(error => console.warn('[MCP] 自动拉取后台消息失败', error)));

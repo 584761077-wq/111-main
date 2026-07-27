@@ -111,6 +111,7 @@
       allowProxy: Boolean(document.getElementById('mcp-allow-proxy')?.checked),
       syncData: Boolean(document.getElementById('mcp-sync-data')?.checked),
       enableJobs: Boolean(document.getElementById('mcp-enable-jobs')?.checked),
+      connectionState: 'unknown',
       updatedAt: new Date().toISOString()
     };
   }
@@ -120,6 +121,46 @@
     if (!status) return;
     status.innerHTML = `<span class="mcp-state-dot${state ? ` is-${state}` : ''}"></span><span></span>`;
     status.lastElementChild.textContent = message;
+  }
+
+  function updateSyncUi() {
+    const syncEnabled = Boolean(document.getElementById('mcp-sync-data')?.checked);
+    const syncNote = document.getElementById('mcp-sync-data-note');
+    const syncWrap = document.getElementById('mcp-sync-manual-wrap');
+    if (syncNote) {
+      syncNote.textContent = syncEnabled ? '同步中' : '默认关闭，开启后才同步至服务器';
+    }
+    if (syncWrap) {
+      syncWrap.hidden = !syncEnabled;
+    }
+  }
+
+  function updateConnectionUi(state) {
+    const button = document.getElementById('mcp-test-connection-btn');
+    const status = document.querySelector('#mcp-connection-status-pill');
+    const map = {
+      connected: { label: '已连接', className: 'is-connected' },
+      failed: { label: '连接失败', className: 'is-failed' },
+      loading: { label: '连接中…', className: 'is-loading' },
+      unknown: { label: '未连接', className: 'is-unknown' }
+    };
+    const config = map[state] || map.unknown;
+    if (button) {
+      button.classList.toggle('is-connected', state === 'connected');
+      button.classList.toggle('is-failed', state === 'failed');
+      button.classList.toggle('is-loading', state === 'loading');
+      button.disabled = state === 'loading';
+      const strong = button.querySelector('.mcp-button-copy strong');
+      const small = button.querySelector('.mcp-button-copy small');
+      if (strong) strong.textContent = config.label;
+      if (small) small.textContent = state === 'connected' ? '点击可重新连接后端与 API Token' : state === 'failed' ? '请检查地址、Token 或网络后重试' : '填写配置后点击连接';
+      const chevron = button.querySelector('.mcp-button-chevron');
+      if (chevron) chevron.textContent = state === 'connected' ? '✓' : '›';
+    }
+    if (status) {
+      status.className = `mcp-connection-pill ${config.className}`;
+      status.textContent = config.label;
+    }
   }
 
   function fillForm(config) {
@@ -214,8 +255,14 @@
   function restoreLocalConfig() {
     const store = readStore();
     const active = store.servers.find(server => server.id === store.activeServerId) || store.servers[0];
-    if (active) fillForm(active);
+    if (active) {
+      fillForm(active);
+      updateConnectionUi(active.connectionState === 'connected' ? 'connected' : 'unknown');
+    } else {
+      updateConnectionUi('unknown');
+    }
     renderSavedServers();
+    updateSyncUi();
   }
 
   function authHeaders(config) {
@@ -236,21 +283,37 @@
       setStatus('请先填写部署完成后的后端地址', 'error');
       return;
     }
-    setStatus('正在验证后端与 API Token…', 'loading');
-    const button = document.getElementById('mcp-test-connection-btn');
-    if (button) button.disabled = true;
+    setStatus('正在连接后端与 API Token…', 'loading');
+    updateConnectionUi('loading');
     try {
       const health = await readJson(await fetch(`${config.backendUrl}/health`, { cache: 'no-store' }));
       const status = await readJson(await fetch(`${config.backendUrl}/api/status`, {
         cache: 'no-store',
         headers: authHeaders(config)
       }));
-      saveLocalConfig();
+      const store = readStore();
+      const nextConfig = { ...config, connectionState: 'connected', updatedAt: new Date().toISOString() };
+      const index = store.servers.findIndex(server => server.id === config.id);
+      if (index >= 0) store.servers[index] = nextConfig;
+      else store.servers.push(nextConfig);
+      store.activeServerId = nextConfig.id;
+      writeStore(store);
+      editingServerId = nextConfig.id;
+      renderSavedServers();
+      updateConnectionUi('connected');
       setStatus(`连接成功 · ${health.version} · ${status.configured ? '后端已配置' : '等待同步配置'}`, 'success');
     } catch (error) {
+      const store = readStore();
+      const failedConfig = { ...config, connectionState: 'failed', updatedAt: new Date().toISOString() };
+      const index = store.servers.findIndex(server => server.id === config.id);
+      if (index >= 0) store.servers[index] = failedConfig;
+      else store.servers.push(failedConfig);
+      store.activeServerId = failedConfig.id;
+      writeStore(store);
+      editingServerId = failedConfig.id;
+      renderSavedServers();
+      updateConnectionUi('failed');
       setStatus(`连接失败：${error.message}`, 'error');
-    } finally {
-      if (button) button.disabled = false;
     }
   }
 
@@ -293,35 +356,10 @@
     }
   }
 
-  async function pullBackgroundEvents() {
-    if (!window.mcpBackgroundBridge) return;
-    const button = document.getElementById('mcp-pull-events-btn');
-    if (button) button.disabled = true;
-    setStatus('正在拉取 VPS 后台消息…', 'loading');
-    try {
-      const result = await window.mcpBackgroundBridge.pullEvents();
-      setStatus(`已导入 ${result.imported} 条消息${result.skipped ? `，跳过 ${result.skipped} 条` : ''}`, 'success');
-    } catch (error) {
-      setStatus(`拉取失败：${error.message}`, 'error');
-    } finally {
-      if (button) button.disabled = false;
-    }
-  }
-
-  async function showBackgroundStatus() {
-    if (!window.mcpBackgroundBridge) return;
-    const button = document.getElementById('mcp-background-status-btn');
-    if (button) button.disabled = true;
-    setStatus('正在读取后台副本…', 'loading');
-    try {
-      const result = await window.mcpBackgroundBridge.getStatus();
-      const contextCount = (result.snapshots || []).reduce((sum, item) => sum + item.contextCount, 0);
-      setStatus(`${result.snapshots.length} 个角色 · ${contextCount} 条上下文 · ${result.pendingEvents} 条待回传`, 'success');
-    } catch (error) {
-      setStatus(`状态读取失败：${error.message}`, 'error');
-    } finally {
-      if (button) button.disabled = false;
-    }
+  function autoSyncIfEnabled() {
+    const syncEnabled = Boolean(document.getElementById('mcp-sync-data')?.checked);
+    updateSyncUi();
+    if (syncEnabled) syncConfigToBackend();
   }
 
   async function runBridgeAction(buttonId, loadingText, successText, action) {
@@ -338,20 +376,171 @@
     }
   }
 
+  function bindPushModal() {
+    const modal = document.getElementById('mcp-push-modal');
+    const openButton = document.getElementById('mcp-enable-push-btn');
+    const subscribeButton = document.getElementById('mcp-push-subscribe-btn');
+    const testButton = document.getElementById('mcp-push-test-btn');
+    const status = document.getElementById('mcp-push-status');
+    if (!modal || !openButton || !subscribeButton || !testButton || !status) return;
+
+    const showStatus = (message, state) => {
+      status.hidden = false;
+      status.className = `mcp-push-status is-${state}`;
+      status.textContent = message;
+    };
+    const setBusy = (busy) => {
+      subscribeButton.disabled = busy;
+      testButton.disabled = busy;
+    };
+    const close = () => {
+      modal.hidden = true;
+      document.body.classList.remove('mcp-push-open');
+    };
+
+    openButton.addEventListener('click', () => {
+      modal.hidden = false;
+      status.hidden = true;
+      document.body.classList.add('mcp-push-open');
+    });
+    modal.querySelectorAll('[data-mcp-close-push]').forEach(element => element.addEventListener('click', close));
+    subscribeButton.addEventListener('click', async () => {
+      setBusy(true);
+      showStatus('正在获取权限并订阅当前设备…', 'loading');
+      try {
+        await window.mcpBackgroundBridge.subscribePush();
+        showStatus('推送订阅成功，已上传后端', 'success');
+        setStatus('Web Push 订阅成功', 'success');
+      } catch (error) {
+        showStatus(`订阅失败：${error.message}`, 'error');
+        setStatus(`Web Push 订阅失败：${error.message}`, 'error');
+      } finally {
+        setBusy(false);
+      }
+    });
+    testButton.addEventListener('click', async () => {
+      setBusy(true);
+      showStatus('正在调用后端发送真实推送…', 'loading');
+      try {
+        const result = await window.mcpBackgroundBridge.testPush();
+        showStatus(`测试推送已发送${result.sent ? ` · ${result.sent} 个订阅` : ''}`, 'success');
+        setStatus('Web Push 测试发送成功', 'success');
+      } catch (error) {
+        showStatus(`测试失败：${error.message}`, 'error');
+        setStatus(`Web Push 测试失败：${error.message}`, 'error');
+      } finally {
+        setBusy(false);
+      }
+    });
+  }
+
+  function bindLogsModal() {
+    const modal = document.getElementById('mcp-logs-modal');
+    const openButton = document.getElementById('mcp-open-logs-btn');
+    const list = document.getElementById('mcp-log-list');
+    const empty = document.getElementById('mcp-log-empty');
+    const liveLabel = document.getElementById('mcp-log-live-label');
+    const clearButton = document.getElementById('mcp-log-clear-btn');
+    if (!modal || !openButton || !list || !empty || !liveLabel || !clearButton) return;
+
+    let pollingTimer = null;
+    let lastLogId = 0;
+
+    const setEmpty = (title, message) => {
+      empty.hidden = false;
+      empty.querySelector('strong').textContent = title;
+      empty.querySelector('p').textContent = message;
+    };
+    const formatTime = value => new Intl.DateTimeFormat('zh-CN', {
+      month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+    }).format(new Date(value));
+    const renderLogs = (logs, reset = false) => {
+      if (reset) list.innerHTML = '';
+      logs.forEach(log => {
+        const row = document.createElement('article');
+        row.className = `mcp-log-row is-${log.status || 'info'}`;
+        row.innerHTML = `<div class="mcp-log-meta"><time></time><span class="mcp-log-type"></span><span class="mcp-log-status"></span></div><p></p>`;
+        row.querySelector('time').textContent = formatTime(log.createdAt);
+        row.querySelector('.mcp-log-type').textContent = log.type || 'system';
+        row.querySelector('.mcp-log-status').textContent = ({ success: '成功', failed: '失败', warning: '警告', info: '信息' })[log.status] || log.status;
+        row.querySelector('p').textContent = log.message;
+        list.appendChild(row);
+        lastLogId = Math.max(lastLogId, Number(log.id) || 0);
+      });
+      empty.hidden = list.children.length > 0;
+      clearButton.disabled = list.children.length === 0;
+      if (logs.length) list.scrollTop = list.scrollHeight;
+    };
+    const fetchLogs = async (reset = false) => {
+      const config = getFormConfig();
+      if (!config.backendUrl) {
+        liveLabel.textContent = '未连接';
+        setEmpty('无法加载日志', '请先填写 MCP 后端地址和 API Token。');
+        return;
+      }
+      if (reset) {
+        lastLogId = 0;
+        list.innerHTML = '';
+        setEmpty('正在拉取真实日志', '正在连接当前 MCP 后端…');
+      }
+      try {
+        const result = await readJson(await fetch(`${config.backendUrl}/api/logs?afterId=${lastLogId}&limit=200`, {
+          cache: 'no-store', headers: authHeaders(config)
+        }));
+        renderLogs(result.logs || [], false);
+        liveLabel.textContent = '实时日志 · 已连接';
+        if (!list.children.length) setEmpty('暂无后端日志', '后端已连接，新运行记录会实时显示在这里。');
+      } catch (error) {
+        liveLabel.textContent = '实时日志 · 连接失败';
+        if (!list.children.length) setEmpty('日志拉取失败', error.message);
+      }
+    };
+    const close = () => {
+      modal.hidden = true;
+      document.body.classList.remove('mcp-logs-open');
+      clearInterval(pollingTimer);
+      pollingTimer = null;
+    };
+
+    openButton.addEventListener('click', () => {
+      modal.hidden = false;
+      document.body.classList.add('mcp-logs-open');
+      fetchLogs(true);
+      clearInterval(pollingTimer);
+      pollingTimer = setInterval(() => fetchLogs(false), 2500);
+    });
+    clearButton.addEventListener('click', async () => {
+      const config = getFormConfig();
+      if (!config.backendUrl) return;
+      clearButton.disabled = true;
+      try {
+        await readJson(await fetch(`${config.backendUrl}/api/logs`, { method: 'DELETE', headers: authHeaders(config) }));
+        lastLogId = 0;
+        list.innerHTML = '';
+        setEmpty('暂无后端日志', '日志已清空，新运行记录会实时显示在这里。');
+      } catch (error) {
+        setEmpty('清空失败', error.message);
+      }
+    });
+    modal.querySelectorAll('[data-mcp-close-logs]').forEach(element => element.addEventListener('click', close));
+  }
+
   function bindServerForm() {
     document.getElementById('mcp-save-config-btn')?.addEventListener('click', saveLocalConfig);
     document.getElementById('mcp-save-local-btn')?.addEventListener('click', saveLocalConfig);
     document.getElementById('mcp-test-connection-btn')?.addEventListener('click', testBackend);
-    document.getElementById('mcp-sync-config-btn')?.addEventListener('click', syncConfigToBackend);
-    document.getElementById('mcp-pull-events-btn')?.addEventListener('click', pullBackgroundEvents);
-    document.getElementById('mcp-background-status-btn')?.addEventListener('click', showBackgroundStatus);
+    document.getElementById('mcp-backend-url')?.addEventListener('input', () => updateConnectionUi('unknown'));
+    document.getElementById('mcp-api-token')?.addEventListener('input', () => updateConnectionUi('unknown'));
+    document.getElementById('mcp-sync-data')?.addEventListener('change', autoSyncIfEnabled);
+    document.getElementById('mcp-enable-jobs')?.addEventListener('change', autoSyncIfEnabled);
+    document.getElementById('mcp-allow-proxy')?.addEventListener('change', autoSyncIfEnabled);
     document.getElementById('mcp-authorize-api-btn')?.addEventListener('click', () => runBridgeAction(
       'mcp-authorize-api-btn', '正在安全授权后台 API…', result => `后台 API 已授权 · ${result.model}`, () => window.mcpBackgroundBridge.authorizeBackgroundApi()
     ));
-    document.getElementById('mcp-enable-push-btn')?.addEventListener('click', () => runBridgeAction(
-      'mcp-enable-push-btn', '正在连接 iOS Web Push…', 'Web Push 已连接到当前设备', () => window.mcpBackgroundBridge.subscribePush()
-    ));
+    bindPushModal();
+    bindLogsModal();
     restoreLocalConfig();
+    updateSyncUi();
   }
 
   function mount() {
