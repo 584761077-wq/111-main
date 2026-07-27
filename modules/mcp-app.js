@@ -424,7 +424,7 @@
       try {
         const result = await window.mcpBackgroundBridge.testPush();
         showStatus(`测试推送已发送${result.sent ? ` · ${result.sent} 个订阅` : ''}`, 'success');
-        setStatus('Web Push 测试发送成功', 'success');
+        setStatus(result.warning ? `Web Push 已发送但部分失败：${result.detail || '请查看后端日志'}` : 'Web Push 测试发送成功', result.warning ? 'warning' : 'success');
       } catch (error) {
         showStatus(`测试失败：${error.message}`, 'error');
         setStatus(`Web Push 测试失败：${error.message}`, 'error');

@@ -1,3 +1,4 @@
+// @ts-nocheck
 'use strict';
 
 const http = require('http');
@@ -136,10 +137,22 @@ function migrateBackgroundJson() {
 
 migrateBackgroundJson();
 
+function formatWebPushError(error, endpoint) {
+  const parts = [];
+  if (endpoint) parts.push(`endpoint=${endpoint}`);
+  if (typeof error?.statusCode !== 'undefined') parts.push(`statusCode=${error.statusCode}`);
+  if (typeof error?.code !== 'undefined') parts.push(`code=${error.code}`);
+  if (error?.body) parts.push(`body=${String(error.body).slice(0, 500)}`);
+  if (error?.headers) parts.push(`headers=${JSON.stringify(error.headers).slice(0, 500)}`);
+  parts.push(`message=${error?.message || 'unknown error'}`);
+  return parts.join(' | ');
+}
+
 async function sendPush(payload) {
   const rows = database.prepare('SELECT endpoint, subscription FROM push_subscriptions').all();
   let sent = 0;
   let failed = 0;
+  const failures = [];
   for (const row of rows) {
     try {
       await webpush.sendNotification(JSON.parse(row.subscription), JSON.stringify(payload), { TTL: 3600 });
@@ -147,14 +160,15 @@ async function sendPush(payload) {
       sent += 1;
     } catch (error) {
       failed += 1;
+      const detail = formatWebPushError(error, row.endpoint);
+      failures.push(detail);
       if (error.statusCode === 404 || error.statusCode === 410) {
         database.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(row.endpoint);
-      } else {
-        console.error('Web Push 发送失败', error.message);
       }
+      console.error('Web Push 发送失败', detail);
     }
   }
-  return { total: rows.length, sent, failed };
+  return { total: rows.length, sent, failed, failures };
 }
 
 async function generateBackgroundMessage(row) {
@@ -384,8 +398,14 @@ const server = http.createServer(async (req, res) => {
         return json(res, 400, { ok: false, error: '暂无推送订阅，请先订阅当前设备' });
       }
       if (!result.sent) {
-        writeRuntimeLog('push', 'failed', `测试推送失败：${result.failed} 个订阅发送失败`);
-        return json(res, 502, { ok: false, error: '真实推送发送失败', ...result });
+        const detail = result.failures?.[0] || '暂无详细错误信息';
+        writeRuntimeLog('push', 'failed', `测试推送失败：${detail}`);
+        return json(res, 502, { ok: false, error: '真实推送发送失败', detail, ...result });
+      }
+      if (result.failed) {
+        const detail = result.failures?.[0] || '暂无详细错误信息';
+        writeRuntimeLog('push', 'warning', `测试推送部分失败：${detail}`);
+        return json(res, 200, { ok: true, warning: true, detail, ...result });
       }
       writeRuntimeLog('push', result.failed ? 'warning' : 'success', `测试推送成功：已发送 ${result.sent} 个订阅`);
       return json(res, 200, { ok: true, ...result });

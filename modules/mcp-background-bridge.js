@@ -168,7 +168,9 @@
       body: JSON.stringify({ title: 'Web Push 测试', body: '当前设备已成功收到一条真实推送通知。' })
     });
     const result = await response.json().catch(() => ({}));
-    if (!response.ok || result.ok === false) throw new Error(result.error || '测试推送发送失败');
+    if (!response.ok || result.ok === false) {
+      throw new Error(result.detail || result.error || '测试推送发送失败');
+    }
     return result;
   }
 
