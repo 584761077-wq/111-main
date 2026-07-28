@@ -44,6 +44,10 @@
   let isTtsPlaying = false;
   let currentCallTtsObjectUrl = null;
   let currentChatTtsObjectUrl = null;
+  let callTtsAbortController = null;
+  let callTtsGeneration = 0;
+  let chatTtsGeneration = 0;
+  let activeTtsCacheReader = null;
   const TTS_CACHE_MAX = 15;
   const TTS_QUEUE_MAX = 8;
 
@@ -70,6 +74,11 @@
   }
 
   function stopTtsQueue() {
+    callTtsGeneration++;
+    if (callTtsAbortController) {
+      callTtsAbortController.abort();
+      callTtsAbortController = null;
+    }
     ttsQueue.length = 0;
     isTtsPlaying = false;
     const callPlayer = document.getElementById('call-tts-audio-player');
@@ -91,9 +100,14 @@
 
   /** 只停聊天语音条播放，不清通话 TTS 队列（打着电话切到别人聊天时用） */
   function stopChatMessageTtsOnly() {
+    chatTtsGeneration++;
     if (ttsAbortController) {
       ttsAbortController.abort();
       ttsAbortController = null;
+    }
+    if (activeTtsCacheReader) {
+      try { activeTtsCacheReader.abort(); } catch (e) {}
+      activeTtsCacheReader = null;
     }
     currentTtsMessageKey = '';
     currentTtsLoading = false;
@@ -128,6 +142,9 @@
 
     isTtsPlaying = true;
     const { text, voiceId } = ttsQueue.shift();
+    const generation = callTtsGeneration;
+    const controller = new AbortController();
+    callTtsAbortController = controller;
 
     try {
       const { minimaxGroupId, minimaxApiKey } = state.apiConfig;
@@ -163,12 +180,14 @@
             format: "mp3",
             channel: 1
           }
-        })
+        }),
+        signal: controller.signal
       });
 
       if (!response.ok) throw new Error("API请求失败");
 
       const data = await response.json();
+      if (controller.signal.aborted || generation !== callTtsGeneration) return;
       if (data.base_resp && data.base_resp.status_code !== 0) throw new Error(data.base_resp.status_msg);
 
       const audioHex = data.data?.audio;
@@ -200,8 +219,12 @@
       await callPlayer.play();
 
     } catch (error) {
-      console.error("TTS生成失败:", error);
-      processNextTts(); // 失败也继续下一条
+      if (error.name !== 'AbortError' && generation === callTtsGeneration) {
+        console.error("TTS生成失败:", error);
+        processNextTts(); // 失败也继续下一条
+      }
+    } finally {
+      if (callTtsAbortController === controller) callTtsAbortController = null;
     }
   }
 
@@ -271,6 +294,14 @@
       realAudioPlayer.src = audioDataDecoded;
       realAudioPlayer.dataset.currentAudio = audioData;
 
+      realAudioPlayer.onended = () => {
+        realAudioPlayer.removeAttribute('src');
+        realAudioPlayer.src = '';
+        delete realAudioPlayer.dataset.currentAudio;
+        try { realAudioPlayer.load(); } catch (e) {}
+      };
+      realAudioPlayer.onerror = realAudioPlayer.onended;
+
       // 播放音频
       await realAudioPlayer.play();
       console.log('播放真实录音');
@@ -336,6 +367,12 @@
       }
     }
 
+    if (ttsAbortController) {
+      ttsAbortController.abort();
+      ttsAbortController = null;
+    }
+    chatTtsGeneration++;
+    const generation = chatTtsGeneration;
     ttsPlayer.pause();
     document.querySelectorAll('.voice-play-btn').forEach(btn => btn.textContent = '▶');
 
@@ -436,6 +473,7 @@
       }
 
       const data = await response.json();
+      if (signal.aborted || generation !== chatTtsGeneration) return;
 
       // 4. 检查业务状态码
       if (data.base_resp && data.base_resp.status_code !== 0) {
@@ -460,8 +498,14 @@
       });
 
       // 写入缓存（限制条数，防止 base64 音频无限堆积）
+      if (activeTtsCacheReader) {
+        try { activeTtsCacheReader.abort(); } catch (e) {}
+      }
       const reader = new FileReader();
+      activeTtsCacheReader = reader;
       reader.onloadend = function () {
+        if (activeTtsCacheReader === reader) activeTtsCacheReader = null;
+        if (reader.error || generation !== chatTtsGeneration || typeof reader.result !== 'string') return;
         state.ttsCache.set(cacheKey, {
           url: reader.result,
           type: 'audio/mpeg'
@@ -713,3 +757,23 @@
   window.playTtsAudio = playTtsAudio;
   window.playRealAudio = playRealAudio;
   window.playSilentAudio = playSilentAudio;
+  window.stopSilentAudio = stopSilentAudio;
+  window.stopTtsQueue = stopTtsQueue;
+  window.stopChatMessageTtsOnly = stopChatMessageTtsOnly;
+  window.stopAllTtsPlayback = stopAllTtsPlayback;
+  window.playVideoCallPureTTS = playVideoCallPureTTS;
+  window.toggleVoiceTranscript = toggleVoiceTranscript;
+  window.toggleBilingualTranslation = toggleBilingualTranslation;
+
+  window.addEventListener('pagehide', () => {
+    stopAllTtsPlayback();
+    stopSilentAudio();
+    const realAudioPlayer = document.getElementById('real-audio-player');
+    if (realAudioPlayer) {
+      realAudioPlayer.pause();
+      realAudioPlayer.removeAttribute('src');
+      realAudioPlayer.src = '';
+      delete realAudioPlayer.dataset.currentAudio;
+      try { realAudioPlayer.load(); } catch (e) {}
+    }
+  });

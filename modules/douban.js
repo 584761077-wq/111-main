@@ -94,11 +94,15 @@
     }
   }
 
+  let doubanRenderVersion = 0;
+
   async function renderDoubanScreen() {
+    const renderVersion = ++doubanRenderVersion;
     const listEl = document.getElementById('douban-posts-list');
     listEl.innerHTML = '';
 
     const posts = await db.doubanPosts.orderBy('timestamp').reverse().toArray();
+    if (renderVersion !== doubanRenderVersion) return;
 
     if (posts.length === 0) {
       listEl.innerHTML = '<p style="text-align:center; color: var(--text-secondary); padding: 50px 0;">这里空空如也，<br>点击右上角刷新按钮，看看大家都在聊什么吧！</p>';
@@ -106,6 +110,7 @@
     }
 
     posts.forEach(post => {
+      if (renderVersion !== doubanRenderVersion) return;
       let avatarUrl;
 
 
@@ -1953,6 +1958,7 @@ ${charactersContext}
   window.openDoubanSettingsModal = openDoubanSettingsModal;
   window.openDeleteDoubanPostsModal = openDeleteDoubanPostsModal;
   window.renderDoubanScreen = renderDoubanScreen;
+  window.invalidateDoubanRender = () => { doubanRenderVersion++; };
   window.saveDoubanSettings = saveDoubanSettings;
   window.addNpcAvatarFromURL = addNpcAvatarFromURL;
   window.addNpcAvatarFromLocal = addNpcAvatarFromLocal;

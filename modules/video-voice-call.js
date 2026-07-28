@@ -35,6 +35,28 @@
 
   let callTimerInterval = null;
   let voiceCallTimerInterval = null;
+  let videoCallRequestController = null;
+  let voiceCallRequestController = null;
+  let videoCallSessionId = 0;
+  let voiceCallSessionId = 0;
+
+  function abortCallRequest(controller) {
+    if (controller && !controller.signal.aborted) controller.abort();
+  }
+
+  function resetCallState(callState) {
+    callState.isActive = false;
+    callState.isAwaitingResponse = false;
+    callState.isGroupCall = false;
+    callState.activeChatId = null;
+    callState.initiator = null;
+    callState.startTime = null;
+    callState.participants = [];
+    callState.isUserParticipating = true;
+    callState.callHistory = [];
+    callState.preCallContext = '';
+    delete callState.callRequester;
+  }
 
 
   async function handleInitiateCall() {
@@ -79,6 +101,9 @@
     const chat = state.chats[videoCallState.activeChatId];
     if (!chat) return;
 
+    abortCallRequest(videoCallRequestController);
+    videoCallRequestController = null;
+    videoCallSessionId++;
     videoCallState.isActive = true;
     videoCallState.isAwaitingResponse = false;
     videoCallState.startTime = Date.now();
@@ -139,7 +164,14 @@
 
   async function endVideoCall() {
     if (!videoCallState.isActive) return;
+    const endingSessionId = ++videoCallSessionId;
+    abortCallRequest(videoCallRequestController);
+    videoCallRequestController = null;
+    clearInterval(callTimerInterval);
+    callTimerInterval = null;
     stopTtsQueue();
+    if (typeof stopCamera === 'function') stopCamera();
+    if (typeof window.clearLastCameraCapture === 'function') window.clearLastCameraCapture();
     document.getElementById('video-call-restore-btn').style.display = 'none';
     const duration = Math.floor((Date.now() - videoCallState.startTime) / 1000);
     const durationText = `${Math.floor(duration / 60)}分${duration % 60}秒`;
@@ -224,9 +256,6 @@
     }
 
 
-    clearInterval(callTimerInterval);
-    callTimerInterval = null;
-
     // 停止摄像头并释放截图缓存
     if (typeof stopCamera === 'function') {
       stopCamera();
@@ -235,18 +264,7 @@
       window.clearLastCameraCapture();
     }
 
-    videoCallState = {
-      isActive: false,
-      isAwaitingResponse: false,
-      isGroupCall: false,
-      activeChatId: null,
-      initiator: null,
-      startTime: null,
-      participants: [],
-      isUserParticipating: true,
-      callHistory: [],
-      preCallContext: ""
-    };
+    if (videoCallSessionId === endingSessionId) resetCallState(videoCallState);
 
 
     if (chat) {
@@ -512,11 +530,16 @@ ${linkedContents}
       });
     }
 
+    const requestSessionId = videoCallSessionId;
+    abortCallRequest(videoCallRequestController);
+    const requestController = new AbortController();
+    videoCallRequestController = requestController;
     try {
       let isGemini = proxyUrl === GEMINI_API_URL;
       let geminiConfig = toGeminiRequestData(model, apiKey, inCallPrompt, messagesForApi)
-      const response = isGemini ? await fetch(geminiConfig.url, geminiConfig.data) : await fetch(`${proxyUrl}/v1/chat/completions`, {
+      const response = isGemini ? await fetch(geminiConfig.url, { ...geminiConfig.data, signal: requestController.signal }) : await fetch(`${proxyUrl}/v1/chat/completions`, {
         method: 'POST',
+        signal: requestController.signal,
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${apiKey}`
@@ -538,6 +561,7 @@ ${linkedContents}
       }
 
       const data = await response.json();
+      if (requestController.signal.aborted || requestSessionId !== videoCallSessionId || !videoCallState.isActive) return;
       const aiResponse = isGemini ? data.candidates[0].content.parts[0].text : data.choices[0].message.content;
 
       const connectingElement = callFeed.querySelector('em');
@@ -687,16 +711,21 @@ ${linkedContents}
       callFeed.scrollTop = callFeed.scrollHeight;
 
     } catch (error) {
-      const errorBubble = document.createElement('div');
-      errorBubble.className = 'call-message-bubble ai-speech';
-      errorBubble.style.color = '#ff8a80';
-      errorBubble.textContent = `[ERROR: ${error.message}]`;
-      callFeed.appendChild(errorBubble);
-      callFeed.scrollTop = callFeed.scrollHeight;
-      videoCallState.callHistory.push({
-        role: 'assistant',
-        content: `[ERROR: ${error.message}]`
-      });
+      if (error.name !== 'AbortError' && requestSessionId === videoCallSessionId && videoCallState.isActive) {
+        const errorMessage = String(error.message || error).slice(0, 500);
+        const errorBubble = document.createElement('div');
+        errorBubble.className = 'call-message-bubble ai-speech';
+        errorBubble.style.color = '#ff8a80';
+        errorBubble.textContent = `[ERROR: ${errorMessage}]`;
+        callFeed.appendChild(errorBubble);
+        callFeed.scrollTop = callFeed.scrollHeight;
+        videoCallState.callHistory.push({
+          role: 'assistant',
+          content: `[ERROR: ${errorMessage}]`
+        });
+      }
+    } finally {
+      if (videoCallRequestController === requestController) videoCallRequestController = null;
     }
     // ★ 每次发送后修剪历史 + 通话气泡 DOM（防 iOS PWA 长通话内存爆）
     trimCallHistory(videoCallState);
@@ -836,6 +865,9 @@ ${linkedContents}
     const chat = state.chats[voiceCallState.activeChatId];
     if (!chat) return;
 
+    abortCallRequest(voiceCallRequestController);
+    voiceCallRequestController = null;
+    voiceCallSessionId++;
     voiceCallState.isActive = true;
     voiceCallState.isAwaitingResponse = false;
     voiceCallState.startTime = Date.now();
@@ -878,6 +910,11 @@ ${linkedContents}
 
   async function endVoiceCall() {
     if (!voiceCallState.isActive) return;
+    const endingSessionId = ++voiceCallSessionId;
+    abortCallRequest(voiceCallRequestController);
+    voiceCallRequestController = null;
+    clearInterval(voiceCallTimerInterval);
+    voiceCallTimerInterval = null;
     stopTtsQueue();
     document.getElementById('voice-call-restore-btn').style.display = 'none';
     const duration = Math.floor((Date.now() - voiceCallState.startTime) / 1000);
@@ -948,21 +985,7 @@ ${linkedContents}
       await db.chats.put(chat);
     }
 
-    clearInterval(voiceCallTimerInterval);
-    voiceCallTimerInterval = null;
-
-    voiceCallState = {
-      isActive: false,
-      isAwaitingResponse: false,
-      isGroupCall: false,
-      activeChatId: null,
-      initiator: null,
-      startTime: null,
-      participants: [],
-      isUserParticipating: true,
-      callHistory: [],
-      preCallContext: ""
-    };
+    if (voiceCallSessionId === endingSessionId) resetCallState(voiceCallState);
 
     if (chat) {
       openChat(chat.id);
@@ -1165,11 +1188,16 @@ ${worldBookContent}
       });
     }
 
+    const requestSessionId = voiceCallSessionId;
+    abortCallRequest(voiceCallRequestController);
+    const requestController = new AbortController();
+    voiceCallRequestController = requestController;
     try {
       let isGemini = proxyUrl === GEMINI_API_URL;
       let geminiConfig = toGeminiRequestData(model, apiKey, inCallPrompt, messagesForApi)
-      const response = isGemini ? await fetch(geminiConfig.url, geminiConfig.data) : await fetch(`${proxyUrl}/v1/chat/completions`, {
+      const response = isGemini ? await fetch(geminiConfig.url, { ...geminiConfig.data, signal: requestController.signal }) : await fetch(`${proxyUrl}/v1/chat/completions`, {
         method: 'POST',
+        signal: requestController.signal,
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${apiKey}`
@@ -1191,6 +1219,7 @@ ${worldBookContent}
       }
 
       const data = await response.json();
+      if (requestController.signal.aborted || requestSessionId !== voiceCallSessionId || !voiceCallState.isActive) return;
       const aiResponse = isGemini ? data.candidates[0].content.parts[0].text : data.choices[0].message.content;
 
       const connectingElement = callFeed.querySelector('em');
@@ -1265,16 +1294,21 @@ ${worldBookContent}
       callFeed.scrollTop = callFeed.scrollHeight;
 
     } catch (error) {
-      const errorBubble = document.createElement('div');
-      errorBubble.className = 'call-message-bubble ai-speech';
-      errorBubble.style.color = '#ff8a80';
-      errorBubble.textContent = `[ERROR: ${error.message}]`;
-      callFeed.appendChild(errorBubble);
-      callFeed.scrollTop = callFeed.scrollHeight;
-      voiceCallState.callHistory.push({
-        role: 'assistant',
-        content: `[ERROR: ${error.message}]`
-      });
+      if (error.name !== 'AbortError' && requestSessionId === voiceCallSessionId && voiceCallState.isActive) {
+        const errorMessage = String(error.message || error).slice(0, 500);
+        const errorBubble = document.createElement('div');
+        errorBubble.className = 'call-message-bubble ai-speech';
+        errorBubble.style.color = '#ff8a80';
+        errorBubble.textContent = `[ERROR: ${errorMessage}]`;
+        callFeed.appendChild(errorBubble);
+        callFeed.scrollTop = callFeed.scrollHeight;
+        voiceCallState.callHistory.push({
+          role: 'assistant',
+          content: `[ERROR: ${errorMessage}]`
+        });
+      }
+    } finally {
+      if (voiceCallRequestController === requestController) voiceCallRequestController = null;
     }
     // ★ 每次发送后修剪历史 + 通话气泡 DOM（防 iOS PWA 长通话内存爆）
     trimCallHistory(voiceCallState);

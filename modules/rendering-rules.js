@@ -173,7 +173,6 @@
 
       selectedRules.clear();
       updateRuleActionBar();
-      renderRulesList();
     }
 
     renderRulesList();

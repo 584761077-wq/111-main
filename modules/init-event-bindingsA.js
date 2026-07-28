@@ -2643,9 +2643,6 @@ window.initEventBindingsA = async function(state, db) {
 
 
       showScreen('world-book-screen');
-
-
-      await renderWorldBookScreen();
     });
 
     document.getElementById('chat-messages').addEventListener('click', async (e) => {

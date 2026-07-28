@@ -12,6 +12,8 @@
 let cameraStream = null;
 let captureInterval = null;
 let lastCapturedImage = null;
+let cameraRequestGeneration = 0;
+let videoOptimizationInitialized = false;
 
 // 提取对话内容（只保留引号内的文本）
 function extractDialogueOnly(text) {
@@ -81,6 +83,9 @@ window.getProcessedTTSText = function (originalText, chatId) {
 
 // 初始化视频通话优化事件监听
 function initVideoOptimization() {
+  if (videoOptimizationInitialized) return;
+  videoOptimizationInitialized = true;
+
   // 视频通话优化开关
   const enableSwitch = document.getElementById('enable-video-optimization-switch');
   const configContainer = document.getElementById('video-optimization-config-container');
@@ -396,6 +401,7 @@ window.applyVideoOptimizationToCall = async function (chat) {
 
 // 启动摄像头
 async function startCamera(useFacingMode) {
+  const requestGeneration = ++cameraRequestGeneration;
   try {
     const facing = useFacingMode || 'user';
     const stream = await navigator.mediaDevices.getUserMedia({
@@ -407,6 +413,15 @@ async function startCamera(useFacingMode) {
       audio: false
     });
 
+    if (requestGeneration !== cameraRequestGeneration ||
+        (typeof videoCallState !== 'undefined' && !videoCallState.isActive)) {
+      stream.getTracks().forEach(track => track.stop());
+      return false;
+    }
+
+    if (cameraStream && cameraStream !== stream) {
+      cameraStream.getTracks().forEach(track => track.stop());
+    }
     cameraStream = stream;
     const videoElement = document.getElementById('local-camera-video');
     if (videoElement) {
@@ -418,6 +433,7 @@ async function startCamera(useFacingMode) {
 
     return true;
   } catch (error) {
+    if (requestGeneration !== cameraRequestGeneration) return false;
     console.error('无法访问摄像头:', error);
     updateCameraStatus(false, '摄像头启动失败: ' + error.message);
     return false;
@@ -426,6 +442,7 @@ async function startCamera(useFacingMode) {
 
 // 停止摄像头
 function stopCamera() {
+  cameraRequestGeneration++;
   if (cameraStream) {
     cameraStream.getTracks().forEach(track => track.stop());
     cameraStream = null;
@@ -443,6 +460,11 @@ function stopCamera() {
 
   // 释放摄像头截图（JPEG base64 很大，长通话不释放会撑爆 iOS）
   lastCapturedImage = null;
+  if (_cameraCaptureCanvas) {
+    _cameraCaptureCanvas.width = 1;
+    _cameraCaptureCanvas.height = 1;
+    _cameraCaptureCanvas = null;
+  }
 
   updateCameraStatus(false, '摄像头已停止');
 }
@@ -499,6 +521,7 @@ function startCameraCapture(intervalSeconds) {
 
   // 定时截取
   captureInterval = setInterval(() => {
+    if (!cameraStream || !cameraStream.active) return;
     captureCameraFrame();
     console.log('已截取摄像头画面');
   }, intervalSeconds * 1000);
@@ -512,6 +535,9 @@ window.getLastCameraCapture = function () {
 window.clearLastCameraCapture = function () {
   lastCapturedImage = null;
 };
+window.stopCamera = stopCamera;
+
+window.addEventListener('pagehide', stopCamera);
 
 // 在页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function () {

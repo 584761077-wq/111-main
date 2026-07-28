@@ -14,6 +14,24 @@
   let recognition = null;
   let recognizedText = '';
   let recordingStartTime = 0;
+  let isStartingRecording = false;
+  let recordingGeneration = 0;
+  let activeAudioReader = null;
+
+  function releaseRecordingResources() {
+    if (recordingStream) {
+      recordingStream.getTracks().forEach(track => track.stop());
+      recordingStream = null;
+    }
+    audioChunks = [];
+    if (recognition) {
+      try { recognition.abort(); } catch (e) {}
+      recognition.onresult = null;
+      recognition.onerror = null;
+      recognition.onend = null;
+      recognition = null;
+    }
+  }
 
   // 初始化录音按钮
   function initVoiceRecording() {
@@ -42,9 +60,16 @@
 
   // 开始录音
   async function startRecording() {
+    if (isStartingRecording || isRecording) return;
+    isStartingRecording = true;
+    const generation = ++recordingGeneration;
     try {
       // 请求麦克风权限
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (generation !== recordingGeneration) {
+        stream.getTracks().forEach(track => track.stop());
+        return;
+      }
       recordingStream = stream;
 
       // 创建MediaRecorder
@@ -68,7 +93,12 @@
       };
 
       mediaRecorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+        const stoppedRecorder = mediaRecorder;
+        const audioBlob = new Blob(audioChunks, { type: stoppedRecorder.mimeType || 'audio/webm' });
+        audioChunks = [];
+
+        if (recordingStream === stream) recordingStream = null;
+        stream.getTracks().forEach(track => track.stop());
 
         // 等待语音识别完成（关键修复：给移动端Chrome足够时间）
         if (recognition) {
@@ -119,12 +149,12 @@
         }
 
         // 现在处理录制的音频（此时recognizedText应该已经有值了）
-        await handleRecordedAudio(audioBlob);
-
-        // 清理资源
-        if (recordingStream) {
-          recordingStream.getTracks().forEach(track => track.stop());
-          recordingStream = null;
+        try {
+          await handleRecordedAudio(audioBlob);
+        } finally {
+          stoppedRecorder.ondataavailable = null;
+          stoppedRecorder.onstop = null;
+          if (mediaRecorder === stoppedRecorder) mediaRecorder = null;
         }
       };
 
@@ -139,6 +169,8 @@
     } catch (error) {
       console.error('无法访问麦克风:', error);
       alert('无法访问麦克风，请检查浏览器权限设置');
+    } finally {
+      if (generation === recordingGeneration) isStartingRecording = false;
     }
   }
 
@@ -237,7 +269,7 @@
   }
 
   // 显示语音文字确认对话框
-  function showVoiceTextConfirmDialog(recognizedText, audioBlob) {
+  function showVoiceTextConfirmDialog(recognizedText) {
     return new Promise((resolve) => {
       // 创建对话框
       const dialog = document.createElement('div');
@@ -309,7 +341,7 @@
     if (!chat) return;
 
     // 显示确认对话框，让用户确认或修改识别的文字
-    const confirmedText = await showVoiceTextConfirmDialog(recognizedText, audioBlob);
+    const confirmedText = await showVoiceTextConfirmDialog(recognizedText);
 
     if (confirmedText === null) {
       console.log('用户取消发送语音消息');
@@ -321,7 +353,10 @@
 
     // 转换为base64
     const reader = new FileReader();
+    activeAudioReader = reader;
     reader.onloadend = async () => {
+      if (activeAudioReader === reader) activeAudioReader = null;
+      if (reader.error || !reader.result) return;
       const base64Audio = reader.result;
 
       // 计算实际音频时长
@@ -352,6 +387,20 @@
 
     reader.readAsDataURL(audioBlob);
   }
+
+  window.addEventListener('pagehide', () => {
+    recordingGeneration++;
+    isStartingRecording = false;
+    if (activeAudioReader) {
+      try { activeAudioReader.abort(); } catch (e) {}
+      activeAudioReader = null;
+    }
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      try { mediaRecorder.stop(); } catch (e) {}
+    }
+    isRecording = false;
+    releaseRecordingResources();
+  });
 
   // 在页面加载完成后初始化
   if (document.readyState === 'loading') {

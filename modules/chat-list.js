@@ -7,6 +7,7 @@
 // ============================================================
 
   var isFavoritesSelectionMode = false;
+  let cleanApiSettingsTimer = null;
 
   function showScreen(screenId) {
     // 检查是否从你画我猜屏幕离开
@@ -53,6 +54,9 @@
     if (currentActiveScreen && currentActiveScreen.id === 'chat-interface-screen' && screenId !== 'chat-interface-screen' && screenId !== 'voice-call-screen' && screenId !== 'video-call-screen') {
       if (typeof stopChatMessageTtsOnly === 'function') stopChatMessageTtsOnly();
     }
+    if (currentActiveScreen && currentActiveScreen.id === 'douban-screen' && screenId !== 'douban-screen' && typeof window.invalidateDoubanRender === 'function') {
+      window.invalidateDoubanRender();
+    }
 
     if (screenId === 'chat-list-screen') {
       renderChatList();
@@ -60,11 +64,19 @@
       // 检查是否有购物车清空通知
       checkPendingCartNotifications();
     }
+    if (cleanApiSettingsTimer) {
+      clearTimeout(cleanApiSettingsTimer);
+      cleanApiSettingsTimer = null;
+    }
     if (screenId === 'api-settings-screen') {
       window.renderApiSettingsProxy();
       if (state.globalSettings.cleanApiSettings && typeof window.openCleanApiSettings === 'function') {
         // 整洁模式：先让原有回显完成，再构建Tab界面
-        setTimeout(() => window.openCleanApiSettings(), 50);
+        cleanApiSettingsTimer = setTimeout(() => {
+          cleanApiSettingsTimer = null;
+          const apiScreen = document.getElementById('api-settings-screen');
+          if (apiScreen && apiScreen.classList.contains('active')) window.openCleanApiSettings();
+        }, 50);
       }
     }
     if (screenId === 'wallpaper-screen') window.renderWallpaperScreenProxy();
