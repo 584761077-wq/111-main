@@ -37,15 +37,29 @@
           .filter(message => !message.isExcluded && message.type !== 'thought_chain_block')
           .slice(-contextLimit)
           .map(toContextMessage);
+        const enabled = chat.settings.enableBackgroundActivity !== false;
+        const syncIntervalMinutes = Math.max(1, Number(chat.settings.actionCooldownMinutes) || 120);
         return {
           chatId: String(chat.id),
           name: chat.name || chat.originalName || '未命名角色',
-          enabled: true,
+          enabled,
           contextLimit,
           actionCooldownMinutes: Number(chat.settings.actionCooldownMinutes) || 15,
+          syncIntervalMinutes,
+          syncGraceMinutes: 30,
           lastActionTimestamp: Number(chat.lastActionTimestamp) || null,
           persona: chat.settings.aiPersona || '',
           userPersona: chat.settings.myPersona || '',
+          promptTemplate: typeof window.getActiveChatPrompt === 'function' ? (window.getActiveChatPrompt(chat.settings.isOfflineMode ? 'offline' : 'single') || '') : '',
+          longTermMemory: Array.isArray(chat.longTermMemory) ? chat.longTermMemory.slice(-50).map(item => ({
+            content: String(item?.content || ''),
+            timestamp: Number(item?.timestamp) || Date.now()
+          })) : [],
+          nameHistory: Array.isArray(chat.nameHistory) ? chat.nameHistory.slice(-20) : [],
+          userProfile: {
+            nickname: window.state?.qzoneSettings?.nickname || '用户',
+            myNickname: chat.settings.myNickname || '我'
+          },
           history,
           backgroundSettings: {
             intervalSeconds: Number(window.state.globalSettings.backgroundActivityInterval) || 60,
@@ -204,8 +218,19 @@
     testPush
   };
 
+  async function handleOpenChat(chatId) {
+    if (chatId && typeof window.showScreen === 'function') {
+      try {
+        window.showScreen('chat-interface-screen');
+      } catch {}
+    }
+    await pullEvents().catch(error => console.warn('[MCP] 打开聊天后拉取失败', error));
+  }
+
   window.addEventListener('focus', () => pullEvents().catch(error => console.warn('[MCP] 自动拉取后台消息失败', error)));
+  window.addEventListener('load', () => pullEvents().catch(error => console.warn('[MCP] 页面加载后拉取失败', error)));
   navigator.serviceWorker?.addEventListener('message', event => {
     if (event.data?.type === 'MCP_PULL_EVENTS') pullEvents().catch(error => console.warn('[MCP] 通知后拉取失败', error));
+    if (event.data?.type === 'OPEN_CHAT') handleOpenChat(event.data.chatId).catch(error => console.warn('[MCP] 打开聊天失败', error));
   });
 })();

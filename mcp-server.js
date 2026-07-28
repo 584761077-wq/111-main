@@ -15,7 +15,7 @@ const CONFIG_FILE = path.join(DATA_DIR, 'server-config.json');
 const BACKGROUND_FILE = path.join(DATA_DIR, 'background-state.json');
 const startedAt = Date.now();
 const CREDENTIAL_SECRET = process.env.MCP_CREDENTIAL_SECRET || API_TOKEN;
-const VAPID_SUBJECT = process.env.MCP_VAPID_SUBJECT || 'mailto:admin@localhost';
+const VAPID_SUBJECT = process.env.MCP_VAPID_SUBJECT || 'mailto:lizeyanyss@gmail.com';
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -171,18 +171,44 @@ async function sendPush(payload) {
   return { total: rows.length, sent, failed, failures };
 }
 
+function buildBackgroundPromptContext(snapshot) {
+  const history = Array.isArray(snapshot.history) ? snapshot.history : [];
+  const persona = snapshot.persona || '未设置';
+  const userPersona = snapshot.userPersona || '未设置';
+  const longTermMemory = Array.isArray(snapshot.longTermMemory) && snapshot.longTermMemory.length
+    ? snapshot.longTermMemory.map(item => `- (记录于 ${new Date(item.timestamp || Date.now()).toISOString()}) ${item.content}`).join('\n')
+    : '- (暂无)';
+  const nameHistory = Array.isArray(snapshot.nameHistory) && snapshot.nameHistory.length
+    ? `- **你的曾用名**: [${snapshot.nameHistory.join(', ')}]`
+    : '';
+  const userProfile = snapshot.userProfile ? `- 用户昵称：${snapshot.userProfile.nickname || '用户'}\n- 你对用户的称呼：${snapshot.userProfile.myNickname || '我'}` : '';
+  const recentHistory = history.map(item => `${item.role === 'assistant' ? '你' : '用户'}: ${item.content}`).join('\n');
+  const promptParts = [
+    snapshot.promptTemplate,
+    `# 角色人设\n${persona}`,
+    `# 用户人设\n${userPersona}`,
+    `# 长期记忆\n${longTermMemory}`,
+    nameHistory,
+    userProfile,
+    `# 上下文\n${recentHistory}`,
+    '请结合以上系统提示词、角色人设、用户人设、长期记忆和上下文，生成一条自然的主动消息。不要提及后台、定时器、服务器或系统。只输出消息正文。'
+  ].filter(Boolean);
+  const systemPrompt = promptParts.join('\n\n');
+  return { systemPrompt, messages: history };
+}
+
 async function generateBackgroundMessage(row) {
   const credentialRow = database.prepare("SELECT value FROM secure_settings WHERE key = 'background_api'").get();
   if (!credentialRow) return;
   const credential = decryptSecret(credentialRow.value);
   const snapshot = JSON.parse(row.payload);
-  const systemPrompt = `你正在扮演角色“${row.name}”。\n角色人设：${snapshot.persona || '未设置'}\n用户人设：${snapshot.userPersona || '未设置'}\n请结合对话上下文，生成一条自然的主动消息。不要提及后台、定时器、服务器或系统。只输出消息正文。`;
-  const history = (snapshot.history || []).map(item => ({ role: ['user', 'assistant', 'system'].includes(item.role) ? item.role : 'user', content: String(item.content || '') }));
+  const promptBundle = buildBackgroundPromptContext(snapshot);
+  const history = promptBundle.messages.map(item => ({ role: ['user', 'assistant', 'system'].includes(item.role) ? item.role : 'user', content: String(item.content || '') }));
   const baseUrl = credential.baseUrl.replace(/\/v1\/?$/, '');
   const response = await fetch(`${baseUrl}/v1/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${credential.apiKey}` },
-    body: JSON.stringify({ model: credential.model, messages: [{ role: 'system', content: systemPrompt }, ...history], temperature: credential.temperature || 0.9, max_tokens: 500 }),
+    body: JSON.stringify({ model: credential.model, messages: [{ role: 'system', content: promptBundle.systemPrompt }, ...history], temperature: credential.temperature || 0.9, max_tokens: 500 }),
     signal: AbortSignal.timeout(60000)
   });
   const data = await response.json().catch(() => ({}));
@@ -218,10 +244,39 @@ async function runScheduler() {
     const rows = database.prepare('SELECT * FROM background_snapshots WHERE enabled = 1').all();
     for (const row of rows) {
       const snapshot = JSON.parse(row.payload);
-      const cooldown = Math.max(1, Number(snapshot.actionCooldownMinutes) || 15) * 60000;
-      if (row.last_run_at && now - row.last_run_at < cooldown) continue;
-      if (Math.random() >= 0.20) continue;
-      try { await generateBackgroundMessage(row); } catch (error) { console.error(`角色 ${row.name} 后台生成失败`, error.message); }
+      if (snapshot.enabled === false) continue;
+      const syncIntervalMinutes = Math.max(1, Number(snapshot.syncIntervalMinutes || snapshot.actionCooldownMinutes) || 120);
+      const graceMinutes = Math.max(1, Number(snapshot.syncGraceMinutes) || 30);
+      const intervalMs = syncIntervalMinutes * 60000;
+      const graceMs = graceMinutes * 60000;
+      const lastSyncedAt = Number(row.synced_at ? new Date(row.synced_at).getTime() : 0) || 0;
+      const backendTimerStartedAt = Number(snapshot.backendTimerStartedAt || 0) || 0;
+      const recentFrontendSync = lastSyncedAt && now - lastSyncedAt < graceMs;
+
+      if (recentFrontendSync) {
+        if (backendTimerStartedAt) {
+          snapshot.backendTimerStartedAt = null;
+          database.prepare('UPDATE background_snapshots SET payload=? WHERE chat_id=?').run(JSON.stringify(snapshot), row.chat_id);
+        }
+        continue;
+      }
+
+      let effectiveBackendTimerStartedAt = backendTimerStartedAt;
+      if (!effectiveBackendTimerStartedAt || effectiveBackendTimerStartedAt < lastSyncedAt) {
+        effectiveBackendTimerStartedAt = now;
+        snapshot.backendTimerStartedAt = effectiveBackendTimerStartedAt;
+        database.prepare('UPDATE background_snapshots SET payload=? WHERE chat_id=?').run(JSON.stringify(snapshot), row.chat_id);
+        continue;
+      }
+
+      if (now - effectiveBackendTimerStartedAt < intervalMs) continue;
+      try {
+        await generateBackgroundMessage({ ...row, payload: JSON.stringify(snapshot) });
+        snapshot.backendTimerStartedAt = Date.now();
+        database.prepare('UPDATE background_snapshots SET payload=? WHERE chat_id=?').run(JSON.stringify(snapshot), row.chat_id);
+      } catch (error) {
+        console.error(`角色 ${row.name} 后台生成失败`, error.message);
+      }
     }
   } finally {
     schedulerRunning = false;
@@ -428,7 +483,18 @@ const server = http.createServer(async (req, res) => {
           const chatId = String(item.chatId || '');
           if (!chatId) continue;
           const contextLimit = Math.min(1000, Math.max(1, Number(item.contextLimit) || 10));
-          const snapshot = { ...item, chatId, contextLimit, history: Array.isArray(item.history) ? item.history.slice(-contextLimit) : [], syncedAt };
+          const syncIntervalMinutes = Math.max(1, Number(item.syncIntervalMinutes || item.actionCooldownMinutes) || 120);
+          const syncGraceMinutes = Math.max(1, Number(item.syncGraceMinutes) || 30);
+          const snapshot = {
+            ...item,
+            chatId,
+            contextLimit,
+            syncIntervalMinutes,
+            syncGraceMinutes,
+            history: Array.isArray(item.history) ? item.history.slice(-contextLimit) : [],
+            syncedAt,
+            backendTimerStartedAt: Number(item.backendTimerStartedAt || 0) || null
+          };
           const existing = selectExisting.get(chatId);
           upsert.run(chatId, snapshot.name || '未命名角色', snapshot.enabled === false ? 0 : 1, contextLimit,
             JSON.stringify(snapshot), existing?.last_run_at || item.lastActionTimestamp || null, existing?.consecutive_runs || 0, syncedAt);
@@ -443,10 +509,27 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'GET' && url.pathname === '/api/background/status') {
+      const now = Date.now();
       const snapshots = database.prepare('SELECT * FROM background_snapshots ORDER BY synced_at DESC').all().map(row => {
         const payload = JSON.parse(row.payload);
-        return { chatId: row.chat_id, name: row.name, enabled: Boolean(row.enabled), contextLimit: row.context_limit,
-          contextCount: payload.history?.length || 0, lastRunAt: row.last_run_at, consecutiveRuns: row.consecutive_runs, syncedAt: row.synced_at };
+        const syncIntervalMinutes = Math.max(1, Number(payload.syncIntervalMinutes || payload.actionCooldownMinutes) || 120);
+        const syncGraceMinutes = Math.max(1, Number(payload.syncGraceMinutes) || 30);
+        const lastSyncedAt = row.synced_at ? new Date(row.synced_at).getTime() : null;
+        const fallbackActive = Boolean(lastSyncedAt && now - lastSyncedAt >= syncGraceMinutes * 60000);
+        return {
+          chatId: row.chat_id,
+          name: row.name,
+          enabled: Boolean(row.enabled),
+          contextLimit: row.context_limit,
+          contextCount: payload.history?.length || 0,
+          lastRunAt: row.last_run_at,
+          consecutiveRuns: row.consecutive_runs,
+          syncedAt: row.synced_at,
+          syncIntervalMinutes,
+          syncGraceMinutes,
+          backendTimerStartedAt: payload.backendTimerStartedAt || null,
+          fallbackActive
+        };
       });
       const pendingEvents = database.prepare('SELECT COUNT(*) AS count FROM delivery_events WHERE acknowledged_at IS NULL').get().count;
       return json(res, 200, { ok: true, snapshots, pendingEvents });
@@ -479,14 +562,15 @@ const server = http.createServer(async (req, res) => {
       const message = { id: crypto.randomUUID(), role: 'assistant', type: 'text', content, timestamp: now, source: 'mcp-background' };
       const event = { id: crypto.randomUUID(), type: 'single_chat_message', chatId: row.chat_id, message, createdAt: new Date(now).toISOString(), acknowledgedAt: null };
       snapshot.history = [...(snapshot.history || []), message].slice(-row.context_limit);
+      snapshot.backendTimerStartedAt = now;
       database.exec('BEGIN');
       try {
         database.prepare('INSERT INTO background_messages (id, chat_id, role, type, content, created_at, source) VALUES (?, ?, ?, ?, ?, ?, ?)')
           .run(message.id, row.chat_id, message.role, message.type, message.content, message.timestamp, message.source);
         database.prepare('INSERT INTO delivery_events (id, message_id, chat_id, created_at) VALUES (?, ?, ?, ?)')
           .run(event.id, message.id, row.chat_id, event.createdAt);
-        database.prepare('UPDATE background_snapshots SET payload = ?, last_run_at = ?, consecutive_runs = consecutive_runs + 1 WHERE chat_id = ?')
-          .run(JSON.stringify(snapshot), now, row.chat_id);
+        database.prepare('UPDATE background_snapshots SET payload = ?, last_run_at = ?, consecutive_runs = consecutive_runs + 1, synced_at = ? WHERE chat_id = ?')
+          .run(JSON.stringify(snapshot), now, new Date(now).toISOString(), row.chat_id);
         database.exec('COMMIT');
       } catch (error) {
         database.exec('ROLLBACK');
