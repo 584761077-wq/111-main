@@ -182,6 +182,21 @@
     switchToMyPhoneScreen('myphone-home-screen');
   }
 
+  function disposeMyPhoneResources() {
+    if (charPlayerState.lrcUpdateInterval) {
+      clearInterval(charPlayerState.lrcUpdateInterval);
+      charPlayerState.lrcUpdateInterval = null;
+    }
+    const player = document.getElementById('char-audio-player');
+    if (player) {
+      player.pause();
+      if (player.src && player.src.startsWith('blob:')) URL.revokeObjectURL(player.src);
+      player.removeAttribute('src');
+      try { player.load(); } catch (e) {}
+    }
+    activeMyPhoneCharacterId = null;
+  }
+
   function switchToCPhone() {
     // 从 MY Phone 切换回 CP Phone 角色选择
     openCharacterSelector();
@@ -1520,6 +1535,7 @@
   window.openMyPhoneConversation = openMyPhoneConversation;
   window.switchToMyPhoneHomeScreen = switchToMyPhoneHomeScreen;
   window.switchToMyPhoneScreen = switchToMyPhoneScreen;
+  window.disposeMyPhoneResources = disposeMyPhoneResources;
   window.switchToCPhone = switchToCPhone;
   window.openMyPhoneSettings = openMyPhoneSettings;
   window.openMyPhoneViewRecords = openMyPhoneViewRecords;

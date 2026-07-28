@@ -1210,6 +1210,8 @@ window.initEventBindingsB = function(state, db) {
 
 
     const fontUrlInput = document.getElementById('font-url-input');
+    let activeFontReader = null;
+    let fontReadGeneration = 0;
     fontUrlInput.addEventListener('input', () => applyCustomFont(fontUrlInput.value.trim(), true));
 
     // 本地字体上传
@@ -1231,8 +1233,14 @@ window.initEventBindingsB = function(state, db) {
       } else {
         document.getElementById('font-local-warning').style.display = 'none';
       }
+      if (activeFontReader) {
+        try { activeFontReader.abort(); } catch (e) {}
+      }
       const reader = new FileReader();
+      const readGeneration = ++fontReadGeneration;
+      activeFontReader = reader;
       reader.onload = function(ev) {
+        if (readGeneration !== fontReadGeneration) return;
         const dataUrl = ev.target.result;
         state.globalSettings.fontLocalData = dataUrl;
         document.getElementById('font-local-filename').textContent = file.name + ' (' + (file.size / 1024 / 1024).toFixed(2) + 'MB)';
@@ -1241,10 +1249,18 @@ window.initEventBindingsB = function(state, db) {
         document.getElementById('font-url-input').placeholder = '已使用本地字体，清除后可输入URL';
         applyCustomFont(state.globalSettings.fontUrl || '', true);
       };
+      reader.onloadend = function() {
+        if (activeFontReader === reader) activeFontReader = null;
+      };
       reader.readAsDataURL(file);
       this.value = null;
     });
     document.getElementById('font-local-clear-btn').addEventListener('click', function() {
+      fontReadGeneration++;
+      if (activeFontReader) {
+        try { activeFontReader.abort(); } catch (e) {}
+        activeFontReader = null;
+      }
       state.globalSettings.fontLocalData = '';
       document.getElementById('font-local-filename').textContent = '';
       document.getElementById('font-local-warning').style.display = 'none';

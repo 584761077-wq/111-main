@@ -57,6 +57,26 @@
     if (currentActiveScreen && currentActiveScreen.id === 'douban-screen' && screenId !== 'douban-screen' && typeof window.invalidateDoubanRender === 'function') {
       window.invalidateDoubanRender();
     }
+    if (currentActiveScreen && currentActiveScreen.id === 'font-settings-screen' && screenId !== 'font-settings-screen' && typeof window.clearFontPreviewStyle === 'function') {
+      window.clearFontPreviewStyle();
+    }
+    if (currentActiveScreen && currentActiveScreen.id === 'myphone-screen' && screenId !== 'myphone-screen' && typeof window.disposeMyPhoneResources === 'function') {
+      window.disposeMyPhoneResources();
+    }
+    if (currentActiveScreen && currentActiveScreen.id === 'character-phone-screen' && screenId !== 'character-phone-screen' && typeof window.disposeCPhoneResources === 'function') {
+      window.disposeCPhoneResources();
+    }
+    if (currentActiveScreen && currentActiveScreen.id === 'rendering-rules-screen' && screenId !== 'rendering-rules-screen') {
+      document.getElementById('rules-tabs')?.replaceChildren();
+      document.getElementById('rules-content-container')?.replaceChildren();
+    }
+    if (currentActiveScreen && currentActiveScreen.id === 'world-book-screen' && screenId !== 'world-book-screen' && screenId !== 'world-book-editor-screen') {
+      document.getElementById('world-book-tabs')?.replaceChildren();
+      document.getElementById('world-book-content-container')?.replaceChildren();
+    }
+    if (currentActiveScreen && currentActiveScreen.id === 'douban-screen' && screenId !== 'douban-screen' && screenId !== 'douban-post-detail-screen') {
+      document.getElementById('douban-posts-list')?.replaceChildren();
+    }
 
     if (screenId === 'chat-list-screen') {
       renderChatList();

@@ -437,6 +437,13 @@ async function cleanupRedundantData() {
     settings: '#font-settings-screen, #wallpaper-screen, #rendering-rules-screen, #preset-screen, #preset-editor-screen, #chat-settings-screen, #long-term-memory-screen'
   };
 
+  function clearFontPreviewStyle() {
+    const previewStyle = document.getElementById('preview-font-style');
+    if (previewStyle) previewStyle.textContent = '';
+    const preview = document.getElementById('font-preview');
+    if (preview) preview.style.fontFamily = '';
+  }
+
   function applyCustomFont(fontUrl, isPreviewOnly = false) {
     const globalFontSize = state.globalSettings.globalFontSize || 16;
     const fontSizeCss = globalFontSize !== 16 ? `font-size: ${globalFontSize}px;` : '';
@@ -446,6 +453,10 @@ async function cleanupRedundantData() {
     const fontSrc = fontLocalData || fontUrl;
 
     if (!fontSrc) {
+      if (isPreviewOnly) {
+        clearFontPreviewStyle();
+        return;
+      }
       // 即使没有自定义字体，也要应用字体大小
       if (fontSizeCss) {
         dynamicFontStyle.innerHTML = `body { ${fontSizeCss} }`;
@@ -465,7 +476,7 @@ async function cleanupRedundantData() {
     if (isPreviewOnly) {
       const previewStyle = document.getElementById('preview-font-style') || document.createElement('style');
       previewStyle.id = 'preview-font-style';
-      previewStyle.innerHTML = newStyle;
+      if (previewStyle.textContent !== newStyle) previewStyle.textContent = newStyle;
       if (!document.getElementById('preview-font-style')) document.head.appendChild(previewStyle);
       document.getElementById('font-preview').style.fontFamily = `'${fontName}', 'bulangni', sans-serif`;
       document.getElementById('font-preview').style.fontSize = `${globalFontSize}px`;
@@ -560,6 +571,7 @@ async function cleanupRedundantData() {
           state.globalSettings.fontLocalData = '';
           state.globalSettings.fontScope = { all: true, homeScreen: true, qq: true, cphone: true, myphone: true, worldBook: true, douban: true, alipay: true, settings: true };
           dynamicFontStyle.innerHTML = '';
+          clearFontPreviewStyle();
           document.getElementById('font-url-input').value = '';
           document.getElementById('font-preview').style.fontFamily = '';
           document.getElementById('font-local-filename').textContent = '';
@@ -601,6 +613,7 @@ async function cleanupRedundantData() {
 
   async function resetToDefaultFont() {
     dynamicFontStyle.innerHTML = '';
+    clearFontPreviewStyle();
     state.globalSettings.fontUrl = '';
     state.globalSettings.fontLocalData = '';
     state.globalSettings.globalFontSize = 16;
@@ -2899,6 +2912,7 @@ async function cleanupRedundantData() {
   window.cleanupRedundantData = cleanupRedundantData;
   window.compressAllLocalImages = compressAllLocalImages;
   window.applyCustomFont = applyCustomFont;
+  window.clearFontPreviewStyle = clearFontPreviewStyle;
   window.initUserWallet = initUserWallet;
   window.initFunds = initFunds;
 
