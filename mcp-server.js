@@ -191,10 +191,66 @@ function buildBackgroundPromptContext(snapshot) {
     nameHistory,
     userProfile,
     `# 上下文\n${recentHistory}`,
-    '请结合以上系统提示词、角色人设、用户人设、长期记忆和上下文，生成一条自然的主动消息。不要提及后台、定时器、服务器或系统。只输出消息正文。'
+    '只生成角色会对用户说出的自然口语，不要输出任何标题、模板、分析、思维过程、系统提示词、JSON、代码块或“继续”等控制词。只输出消息正文。'
   ].filter(Boolean);
   const systemPrompt = promptParts.join('\n\n');
   return { systemPrompt, messages: history };
+}
+
+function sanitizeBackgroundContent(content) {
+  const text = String(content || '').trim();
+  if (!text) return '';
+  const lines = text
+    .replace(/```[\s\S]*?```/g, '')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .filter(line => !/^#+\s*/.test(line))
+    .filter(line => !/^(system prompt|prompt|system|思维链|分析|推理|chain of thought|cot|继续[:：]?|请继续[:：]?)/i.test(line))
+    .filter(line => !/请结合以上|不要提及后台|只输出消息正文|角色设定|用户设定|长期记忆|上下文/.test(line));
+  const cleaned = lines.join('\n').trim();
+  return cleaned || text;
+}
+
+function looksLikePromptLeak(content) {
+  const text = String(content || '');
+  const leakPatterns = [
+    /#\s*角色人设/,
+    /#\s*用户人设/,
+    /#\s*长期记忆/,
+    /#\s*上下文/,
+    /请结合以上系统提示词/,
+    /只输出消息正文/,
+    /不要提及后台/,
+    /思维链|chain of thought|cot/i,
+    /JSON数组|qzone_post|qzone_comment/
+  ];
+  return leakPatterns.some(pattern => pattern.test(text));
+}
+
+function splitMessageBubbles(content) {
+  const text = String(content || '').trim();
+  if (!text) return [];
+  const paragraphs = text
+    .split(/\n\s*\n+/)
+    .map(part => part.trim())
+    .filter(Boolean);
+  const chunks = [];
+  for (const paragraph of paragraphs.length ? paragraphs : [text]) {
+    const sentences = paragraph.match(/[^。！？!?；;\n]+[。！？!?；;]?|[^。！？!?；;\n]+$/g) || [paragraph];
+    let buffer = '';
+    for (const sentence of sentences.map(item => item.trim()).filter(Boolean)) {
+      const next = buffer ? `${buffer}${sentence}` : sentence;
+      if (next.length > 70 && buffer) {
+        chunks.push(buffer.trim());
+        buffer = sentence;
+      } else {
+        buffer = next;
+      }
+    }
+    if (buffer.trim()) chunks.push(buffer.trim());
+  }
+  return chunks.filter(Boolean).slice(0, 4);
 }
 
 async function generateBackgroundMessage(row) {
@@ -205,34 +261,72 @@ async function generateBackgroundMessage(row) {
   const promptBundle = buildBackgroundPromptContext(snapshot);
   const history = promptBundle.messages.map(item => ({ role: ['user', 'assistant', 'system'].includes(item.role) ? item.role : 'user', content: String(item.content || '') }));
   const baseUrl = credential.baseUrl.replace(/\/v1\/?$/, '');
-  const response = await fetch(`${baseUrl}/v1/chat/completions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${credential.apiKey}` },
-    body: JSON.stringify({ model: credential.model, messages: [{ role: 'system', content: promptBundle.systemPrompt }, ...history], temperature: credential.temperature || 0.9, max_tokens: 500 }),
-    signal: AbortSignal.timeout(60000)
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error?.message || `AI API 请求失败（${response.status}）`);
-  const content = String(data.choices?.[0]?.message?.content || '').trim();
-  if (!content) throw new Error('AI API 未返回消息内容');
-  const now = Date.now();
-  const message = { id: crypto.randomUUID(), role: 'assistant', type: 'text', content, timestamp: now, source: 'mcp-background' };
-  const eventId = crypto.randomUUID();
-  snapshot.history = [...(snapshot.history || []), message].slice(-row.context_limit);
-  database.exec('BEGIN');
-  try {
-    database.prepare('INSERT INTO background_messages (id, chat_id, role, type, content, created_at, source) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(message.id, row.chat_id, message.role, message.type, message.content, now, message.source);
-    database.prepare('INSERT INTO delivery_events (id, message_id, chat_id, created_at) VALUES (?, ?, ?, ?)')
-      .run(eventId, message.id, row.chat_id, new Date(now).toISOString());
-    database.prepare('UPDATE background_snapshots SET payload=?, last_run_at=?, consecutive_runs=consecutive_runs+1 WHERE chat_id=?')
-      .run(JSON.stringify(snapshot), now, row.chat_id);
-    database.exec('COMMIT');
-  } catch (error) {
-    database.exec('ROLLBACK');
-    throw error;
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${credential.apiKey}` },
+      body: JSON.stringify({
+        model: credential.model,
+        messages: [{ role: 'system', content: promptBundle.systemPrompt }, ...history],
+        temperature: attempt === 1 ? (credential.temperature || 0.9) : 0.4,
+        top_p: 0.9,
+        max_tokens: 300,
+        presence_penalty: 0.2,
+        frequency_penalty: 0.2
+      }),
+      signal: AbortSignal.timeout(60000)
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      lastError = new Error(data.error?.message || `AI API 请求失败（${response.status}）`);
+      continue;
+    }
+
+    const rawContent = String(data.choices?.[0]?.message?.content || '').trim();
+    const content = sanitizeBackgroundContent(rawContent);
+    if (!content) {
+      lastError = new Error('AI API 未返回可用消息内容');
+      continue;
+    }
+    if (looksLikePromptLeak(rawContent)) {
+      lastError = new Error('AI 返回内容包含提示词或思维链泄露，已重试');
+      continue;
+    }
+
+    const now = Date.now();
+    const bubbleContents = splitMessageBubbles(content);
+    const messageIds = [];
+    database.exec('BEGIN');
+    try {
+      for (const bubbleContent of bubbleContents) {
+        const message = { id: crypto.randomUUID(), role: 'assistant', type: 'text', content: bubbleContent, timestamp: Date.now(), source: 'mcp-background' };
+        const eventId = crypto.randomUUID();
+        messageIds.push({ message, eventId });
+        database.prepare('INSERT INTO background_messages (id, chat_id, role, type, content, created_at, source) VALUES (?, ?, ?, ?, ?, ?, ?)')
+          .run(message.id, row.chat_id, message.role, message.type, message.content, message.timestamp, message.source);
+        database.prepare('INSERT INTO delivery_events (id, message_id, chat_id, created_at) VALUES (?, ?, ?, ?)')
+          .run(eventId, message.id, row.chat_id, new Date(message.timestamp).toISOString());
+      }
+      const lastMessage = messageIds[messageIds.length - 1]?.message;
+      if (lastMessage) {
+        snapshot.history = [...(snapshot.history || []), lastMessage].slice(-row.context_limit);
+      }
+      database.prepare('UPDATE background_snapshots SET payload=?, last_run_at=?, consecutive_runs=consecutive_runs+1 WHERE chat_id=?')
+        .run(JSON.stringify(snapshot), now, row.chat_id);
+      database.exec('COMMIT');
+    } catch (error) {
+      database.exec('ROLLBACK');
+      throw error;
+    }
+    for (const item of messageIds) {
+      await sendPush({ title: row.name || 'EPhone', body: item.message.content, tag: `mcp-${row.chat_id}-${item.message.id}`, data: { chatId: row.chat_id, eventId: item.eventId, messageId: item.message.id } });
+    }
+    return;
   }
-  await sendPush({ title: row.name || 'EPhone', body: content, tag: `mcp-${row.chat_id}`, data: { chatId: row.chat_id, eventId } });
+
+  throw lastError || new Error('AI 生成失败');
 }
 
 let schedulerRunning = false;
@@ -542,7 +636,7 @@ const server = http.createServer(async (req, res) => {
       const events = rows.map(row => ({ id: row.event_id, type: 'single_chat_message', chatId: row.chat_id,
         message: { id: row.message_id, role: row.role, type: row.type, content: row.content, timestamp: row.created_at, source: row.source },
         createdAt: row.event_created_at, acknowledgedAt: row.acknowledged_at }));
-      return json(res, 200, { ok: true, events });
+      return json(res, 200, { ok: true, events, serverTime: new Date().toISOString() });
     }
 
     const ackMatch = url.pathname.match(/^\/api\/background\/events\/([^/]+)\/ack$/);
@@ -559,16 +653,24 @@ const server = http.createServer(async (req, res) => {
       const snapshot = JSON.parse(row.payload);
       const now = Date.now();
       const content = String(body.content || `这是 ${row.name || '角色'} 的第 ${Number(row.consecutive_runs) + 1} 次后台测试消息。`);
-      const message = { id: crypto.randomUUID(), role: 'assistant', type: 'text', content, timestamp: now, source: 'mcp-background' };
-      const event = { id: crypto.randomUUID(), type: 'single_chat_message', chatId: row.chat_id, message, createdAt: new Date(now).toISOString(), acknowledgedAt: null };
-      snapshot.history = [...(snapshot.history || []), message].slice(-row.context_limit);
+      const bubbleContents = splitMessageBubbles(content);
+      const events = [];
       snapshot.backendTimerStartedAt = now;
       database.exec('BEGIN');
       try {
-        database.prepare('INSERT INTO background_messages (id, chat_id, role, type, content, created_at, source) VALUES (?, ?, ?, ?, ?, ?, ?)')
-          .run(message.id, row.chat_id, message.role, message.type, message.content, message.timestamp, message.source);
-        database.prepare('INSERT INTO delivery_events (id, message_id, chat_id, created_at) VALUES (?, ?, ?, ?)')
-          .run(event.id, message.id, row.chat_id, event.createdAt);
+        for (const bubbleContent of bubbleContents) {
+          const message = { id: crypto.randomUUID(), role: 'assistant', type: 'text', content: bubbleContent, timestamp: Date.now(), source: 'mcp-background' };
+          const event = { id: crypto.randomUUID(), type: 'single_chat_message', chatId: row.chat_id, message, createdAt: new Date(message.timestamp).toISOString(), acknowledgedAt: null };
+          events.push(event);
+          database.prepare('INSERT INTO background_messages (id, chat_id, role, type, content, created_at, source) VALUES (?, ?, ?, ?, ?, ?, ?)')
+            .run(message.id, row.chat_id, message.role, message.type, message.content, message.timestamp, message.source);
+          database.prepare('INSERT INTO delivery_events (id, message_id, chat_id, created_at) VALUES (?, ?, ?, ?)')
+            .run(event.id, message.id, row.chat_id, event.createdAt);
+        }
+        const lastMessage = events[events.length - 1]?.message;
+        if (lastMessage) {
+          snapshot.history = [...(snapshot.history || []), lastMessage].slice(-row.context_limit);
+        }
         database.prepare('UPDATE background_snapshots SET payload = ?, last_run_at = ?, consecutive_runs = consecutive_runs + 1, synced_at = ? WHERE chat_id = ?')
           .run(JSON.stringify(snapshot), now, new Date(now).toISOString(), row.chat_id);
         database.exec('COMMIT');
@@ -576,7 +678,7 @@ const server = http.createServer(async (req, res) => {
         database.exec('ROLLBACK');
         throw error;
       }
-      return json(res, 200, { ok: true, event, contextCount: snapshot.history.length, consecutiveRuns: Number(row.consecutive_runs) + 1 });
+      return json(res, 200, { ok: true, events, contextCount: snapshot.history.length, consecutiveRuns: Number(row.consecutive_runs) + 1 });
     }
 
     return json(res, 404, { ok: false, error: '接口不存在' });

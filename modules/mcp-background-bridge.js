@@ -121,7 +121,7 @@
     const isViewing = window.state.activeChatId === event.chatId && document.getElementById('chat-interface-screen')?.classList.contains('active');
     if (!isViewing) chat.unreadCount = (chat.unreadCount || 0) + 1;
     await window.db.chats.put(chat);
-    if (isViewing && typeof window.appendMessage === 'function') window.appendMessage(message, chat);
+    if (isViewing && typeof window.appendMessage === 'function') window.appendMessage(message, chat, { isBubbleGroupItem: true, bubbleGroupId: event.id });
     if (typeof window.renderChatList === 'function') window.renderChatList();
     return true;
   }
@@ -188,9 +188,30 @@
     return result;
   }
 
+  let syncInFlight = null;
+  let lastAutoSyncAt = 0;
+
+  async function ensureSnapshotsSynced() {
+    const server = getActiveServer();
+    if (!server?.backendUrl || !server.enableJobs) return { skipped: true, reason: 'remote-background-disabled' };
+    const now = Date.now();
+    if (syncInFlight) return syncInFlight;
+    if (now - lastAutoSyncAt < 15000) return { skipped: true, reason: 'auto-sync-throttled' };
+    syncInFlight = syncSnapshots()
+      .then(result => {
+        lastAutoSyncAt = Date.now();
+        return result;
+      })
+      .finally(() => {
+        syncInFlight = null;
+      });
+    return syncInFlight;
+  }
+
   async function pullEvents() {
     const server = getActiveServer();
     if (!server?.backendUrl || !server.enableJobs) return { imported: 0, skipped: 0 };
+    await ensureSnapshotsSynced().catch(error => console.warn('[MCP] 拉取前同步失败', error));
     const response = await fetch(`${server.backendUrl}/api/background/events`, { headers: headers(server, false), cache: 'no-store' });
     const result = await response.json().catch(() => ({}));
     if (!response.ok || result.ok === false) throw new Error(result.error || `消息拉取失败（${response.status}）`);
