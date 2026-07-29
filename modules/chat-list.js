@@ -60,6 +60,9 @@
     if (currentActiveScreen && currentActiveScreen.id === 'font-settings-screen' && screenId !== 'font-settings-screen' && typeof window.clearFontPreviewStyle === 'function') {
       window.clearFontPreviewStyle();
     }
+    if (currentActiveScreen && currentActiveScreen.id === 'wallpaper-screen' && screenId !== 'wallpaper-screen' && typeof window.clearWallpaperScreenPreviews === 'function') {
+      window.clearWallpaperScreenPreviews();
+    }
     if (currentActiveScreen && currentActiveScreen.id === 'myphone-screen' && screenId !== 'myphone-screen' && typeof window.disposeMyPhoneResources === 'function') {
       window.disposeMyPhoneResources();
     }

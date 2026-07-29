@@ -540,6 +540,7 @@
       pos4 = 0;
     let isDragging = false;
     let hasMoved = false;
+    let suppressClick = false;
     const phoneScreen = document.getElementById('phone-screen');
 
     const startDrag = (e) => {
@@ -629,11 +630,16 @@
         }
       }
 
-      if (!hasMoved) {
-
-        windowEl.click();
-      }
+      suppressClick = hasMoved;
     };
+
+    headerEl.addEventListener('click', e => {
+      if (suppressClick) {
+        suppressClick = false;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      }
+    }, true);
 
     headerEl.addEventListener('mousedown', startDrag);
 

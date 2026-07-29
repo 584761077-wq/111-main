@@ -39,9 +39,86 @@
   let voiceCallRequestController = null;
   let videoCallSessionId = 0;
   let voiceCallSessionId = 0;
+  let voiceCallDraftWrite = Promise.resolve();
 
   function abortCallRequest(controller) {
     if (controller && !controller.signal.aborted) controller.abort();
+  }
+
+  function queueVoiceCallDraftUpdate(mutator) {
+    const recordId = voiceCallState.recordId;
+    if (!recordId) return Promise.resolve();
+    voiceCallDraftWrite = voiceCallDraftWrite
+      .catch(() => {})
+      .then(() => db.callRecords.get(recordId))
+      .then(record => {
+        if (!record || record.status !== 'active') return;
+        mutator(record);
+        record.lastUpdatedAt = Date.now();
+        return db.callRecords.put(record);
+      })
+      .catch(error => console.error('[语音通话] 保存通话草稿失败:', error));
+    return voiceCallDraftWrite;
+  }
+
+  function persistVoiceCallMessage(message) {
+    const persistedMessage = { ...message };
+    return queueVoiceCallDraftUpdate(record => {
+      record.transcript = Array.isArray(record.transcript) ? record.transcript : [];
+      const existingIndex = record.transcript.findIndex(item => item.timestamp === persistedMessage.timestamp);
+      if (existingIndex >= 0) record.transcript[existingIndex] = persistedMessage;
+      else record.transcript.push(persistedMessage);
+    });
+  }
+
+  function updateVoiceCallDraftMessage(timestamp, content) {
+    return queueVoiceCallDraftUpdate(record => {
+      const message = Array.isArray(record.transcript)
+        ? record.transcript.find(item => item.timestamp === timestamp)
+        : null;
+      if (message) message.content = content;
+    });
+  }
+
+  function deleteVoiceCallDraftMessage(timestamp) {
+    return queueVoiceCallDraftUpdate(record => {
+      record.transcript = Array.isArray(record.transcript)
+        ? record.transcript.filter(item => item.timestamp !== timestamp)
+        : [];
+    });
+  }
+
+  async function recoverInterruptedVoiceCalls() {
+    try {
+      const activeRecords = await db.callRecords.filter(record => record.callType === 'voice' && record.status === 'active').toArray();
+      for (const record of activeRecords) {
+        const endTime = record.lastUpdatedAt || record.startTime || record.timestamp || Date.now();
+        const startTime = record.startTime || record.timestamp || endTime;
+        const duration = Math.max(0, Math.floor((endTime - startTime) / 1000));
+        await db.callRecords.update(record.id, {
+          status: 'interrupted',
+          endReason: 'app_terminated',
+          endTime,
+          duration,
+          lastUpdatedAt: Date.now()
+        });
+
+        const chat = state.chats[record.chatId];
+        if (!chat) continue;
+        const alreadyRecorded = chat.history.some(message => message.callRecordId === record.id);
+        if (alreadyRecorded) continue;
+        const durationText = `${Math.floor(duration / 60)}分${duration % 60}秒`;
+        chat.history.push({
+          role: record.initiator === 'user' ? 'user' : 'assistant',
+          content: `语音通话意外中断，时长 ${durationText}`,
+          timestamp: endTime,
+          callRecordId: record.id
+        });
+        await db.chats.put(chat);
+      }
+    } catch (error) {
+      console.error('[语音通话] 恢复未完成通话失败:', error);
+    }
   }
 
   function resetCallState(callState) {
@@ -861,7 +938,7 @@ ${linkedContents}
     await triggerAiResponse();
   }
 
-  function startVoiceCall() {
+  async function startVoiceCall() {
     const chat = state.chats[voiceCallState.activeChatId];
     if (!chat) return;
 
@@ -872,6 +949,24 @@ ${linkedContents}
     voiceCallState.isAwaitingResponse = false;
     voiceCallState.startTime = Date.now();
     voiceCallState.callHistory = [];
+
+    const draftRecord = {
+      chatId: voiceCallState.activeChatId,
+      timestamp: voiceCallState.startTime,
+      startTime: voiceCallState.startTime,
+      lastUpdatedAt: voiceCallState.startTime,
+      duration: 0,
+      participants: [],
+      transcript: [],
+      callType: 'voice',
+      status: 'active',
+      initiator: voiceCallState.initiator
+    };
+    try {
+      voiceCallState.recordId = await db.callRecords.add(draftRecord);
+    } catch (error) {
+      console.error('[语音通话] 创建通话草稿失败:', error);
+    }
 
     const preCallHistory = chat.history.slice(-10);
     voiceCallState.preCallContext = preCallHistory.map(msg => {
@@ -946,21 +1041,32 @@ ${linkedContents}
         });
       }
 
+      await voiceCallDraftWrite.catch(() => {});
       const callRecord = {
         chatId: voiceCallState.activeChatId,
-        timestamp: Date.now(),
+        timestamp: voiceCallState.startTime,
+        startTime: voiceCallState.startTime,
+        endTime: Date.now(),
+        lastUpdatedAt: Date.now(),
         duration: duration,
         participants: participantsData,
-        transcript: [...voiceCallState.callHistory],
-        callType: 'voice'
+        callType: 'voice',
+        status: 'completed',
+        endReason: 'user_hangup'
       };
-      await db.callRecords.add(callRecord);
-      console.log("语音通话记录已保存:", callRecord);
+      if (voiceCallState.recordId) {
+        await db.callRecords.update(voiceCallState.recordId, callRecord);
+      } else {
+        callRecord.transcript = [...voiceCallState.callHistory];
+        voiceCallState.recordId = await db.callRecords.add(callRecord);
+      }
+      console.log("语音通话记录已完成:", callRecord);
 
       let summaryMessage = {
         role: voiceCallState.initiator === 'user' ? 'user' : 'assistant',
         content: endCallText,
         timestamp: Date.now(),
+        callRecordId: voiceCallState.recordId
       };
       if (chat.isGroup && summaryMessage.role === 'assistant') {
         summaryMessage.senderName = voiceCallState.callRequester || chat.members[0]?.originalName || chat.name;
@@ -1104,11 +1210,13 @@ ${linkedContents}
       callFeed.appendChild(userBubble);
       callFeed.scrollTop = callFeed.scrollHeight;
 
-      voiceCallState.callHistory.push({
+      const userCallMessage = {
         role: 'user',
         content: userInput,
         timestamp: userTimestamp
-      });
+      };
+      voiceCallState.callHistory.push(userCallMessage);
+      persistVoiceCallMessage(userCallMessage);
     }
 
     let inCallPrompt;
@@ -1236,11 +1344,13 @@ ${worldBookContent}
           aiBubble.dataset.timestamp = aiTimestamp;
           addLongPressListener(aiBubble, () => showCallMessageActions(aiTimestamp));
           callFeed.appendChild(aiBubble);
-          voiceCallState.callHistory.push({
+          const groupVoiceMessage = {
             role: 'assistant',
             content: `${turn.name}: ${turn.speech}`,
             timestamp: aiTimestamp
-          });
+          };
+          voiceCallState.callHistory.push(groupVoiceMessage);
+          persistVoiceCallMessage(groupVoiceMessage);
 
           const speaker = voiceCallState.participants.find(p => p.name === turn.name);
           if (speaker) {
@@ -1270,11 +1380,13 @@ ${worldBookContent}
           addLongPressListener(aiBubble, () => showCallMessageActions(aiTimestamp));
           callFeed.appendChild(aiBubble);
 
-          voiceCallState.callHistory.push({
+          const aiVoiceMessage = {
             role: 'assistant',
             content: messageContent,
             timestamp: aiTimestamp
-          });
+          };
+          voiceCallState.callHistory.push(aiVoiceMessage);
+          persistVoiceCallMessage(aiVoiceMessage);
 
           // 为每条消息播放TTS
           if (enableTts && voiceId) {
@@ -1302,10 +1414,13 @@ ${worldBookContent}
         errorBubble.textContent = `[ERROR: ${errorMessage}]`;
         callFeed.appendChild(errorBubble);
         callFeed.scrollTop = callFeed.scrollHeight;
-        voiceCallState.callHistory.push({
+        const voiceErrorMessage = {
           role: 'assistant',
-          content: `[ERROR: ${errorMessage}]`
-        });
+          content: `[ERROR: ${errorMessage}]`,
+          timestamp: Date.now()
+        };
+        voiceCallState.callHistory.push(voiceErrorMessage);
+        persistVoiceCallMessage(voiceErrorMessage);
       }
     } finally {
       if (voiceCallRequestController === requestController) voiceCallRequestController = null;
@@ -1512,6 +1627,7 @@ ${worldBookContent}
         finalContent = `${senderName}: ${newContent}`;
       }
       message.content = finalContent;
+      if (!isVideoCall) updateVoiceCallDraftMessage(timestamp, finalContent);
 
       const messageBubble = document.querySelector(`.call-message-bubble[data-timestamp="${timestamp}"]`);
       if (messageBubble) {
@@ -1545,6 +1661,7 @@ ${worldBookContent}
       const messageIndex = currentCallState.callHistory.findIndex(m => m.timestamp === timestampToDelete);
       if (messageIndex > -1) {
         currentCallState.callHistory.splice(messageIndex, 1);
+        if (!isVideoCall) deleteVoiceCallDraftMessage(timestampToDelete);
       }
 
       const messageBubble = document.querySelector(`.call-message-bubble[data-timestamp="${timestampToDelete}"]`);
@@ -1560,6 +1677,7 @@ ${worldBookContent}
   // ========== 导出到全局作用域 ==========
   window.videoCallState = videoCallState;
   window.voiceCallState = voiceCallState;
+  window.recoverInterruptedVoiceCalls = recoverInterruptedVoiceCalls;
   window.handleInitiateCall = handleInitiateCall;
   window.startVideoCall = startVideoCall;
   window.minimizeVideoCall = minimizeVideoCall;

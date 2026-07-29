@@ -1757,7 +1757,25 @@
     loadSystemNotificationSettings();
   }
 
+  function clearWallpaperScreenPreviews() {
+    document.getElementById('icon-settings-grid')?.replaceChildren();
+    document.getElementById('cphone-icon-settings-grid')?.replaceChildren();
+    document.getElementById('myphone-icon-settings-grid')?.replaceChildren();
+
+    [
+      'wallpaper-preview',
+      'cphone-wallpaper-preview',
+      'myphone-wallpaper-preview',
+      'global-bg-preview',
+      'lock-wallpaper-preview'
+    ].forEach(id => {
+      const preview = document.getElementById(id);
+      if (preview) preview.style.backgroundImage = 'none';
+    });
+  }
+
   window.renderWallpaperScreenProxy = renderWallpaperScreen;
+  window.clearWallpaperScreenPreviews = clearWallpaperScreenPreviews;
 
   function applyGlobalWallpaper() {
     const homeScreen = document.getElementById('home-screen');
