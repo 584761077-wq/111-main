@@ -52,7 +52,7 @@ const translations = {
     homeAppCPhone: 'CPhone',
     homeAppDouban: '豆瓣',
     homeAppPreset: '预设',
-    homeAppTutorial: 'mcp',
+    homeAppTutorial: '教程',
     homeAppWerewolf: '狼人杀',
     homeAppX: 'X',
     homeAppCharGenerator: '角色生成',
@@ -115,7 +115,7 @@ const translations = {
     presetAddEntryBtn: '[+] 添加新条目',
 
     // --- 教程 ---
-    tutorialTitle: 'macp',
+    tutorialTitle: '教程',
 
     // --- API 设置 ---
     apiSettingsTitle: 'API 设置',

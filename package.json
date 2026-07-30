@@ -6,8 +6,6 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "mcp:start": "node mcp-server.js",
-    "mcp:check": "node --check mcp-server.js",
     "pm2:start": "pm2 start server.js --name online-chat",
     "pm2:stop": "pm2 stop online-chat",
     "pm2:restart": "pm2 restart online-chat",
@@ -24,11 +22,10 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "web-push": "^3.6.7",
     "ws": "^8.16.0"
   },
   "engines": {
-    "node": ">=22.5.0",
+    "node": ">=18.0.0",
     "npm": ">=9.0.0"
   }
 }

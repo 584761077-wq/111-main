@@ -2,7 +2,7 @@
 // 【智能缓存策略】- 根据资源类型使用不同的缓存策略，优化加载速度
 
 // 缓存版本号（智能缓存策略）
-const CACHE_VERSION = 'v0.0.37';
+const CACHE_VERSION = 'v0.0.36';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 // 需要被缓存的文件列表（仅用于离线访问）
@@ -193,15 +193,11 @@ self.addEventListener('push', event => {
   };
   
   event.waitUntil(
-    self.registration.showNotification(title, options).then(() =>
-      clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clientList => {
-        clientList.forEach(client => client.postMessage({ type: 'MCP_PULL_EVENTS' }));
-      })
-    )
+    self.registration.showNotification(title, options)
   );
 });
 
-// 5. 接收来自页面的消息（用于手动触发通知 / 拉取后台消息）
+// 5. 接收来自页面的消息（用于手动触发通知）
 self.addEventListener('message', event => {
   console.log('[SW] 收到页面消息:', event.data);
   
@@ -209,15 +205,6 @@ self.addEventListener('message', event => {
     const { title, options } = event.data;
     event.waitUntil(
       self.registration.showNotification(title, options)
-    );
-    return;
-  }
-
-  if (event.data && event.data.type === 'MCP_PULL_EVENTS') {
-    event.waitUntil(
-      self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clientList => {
-        clientList.forEach(client => client.postMessage({ type: 'MCP_PULL_EVENTS' }));
-      })
     );
   }
 });

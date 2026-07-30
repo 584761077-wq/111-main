@@ -547,24 +547,9 @@ if (!window.__appBootstrapStarted) {
 
 
 
-  async function registerServiceWorker() {
-    if (!('serviceWorker' in navigator)) return false;
-    try {
-      const registration = await navigator.serviceWorker.register('/sw.js?v=0.0.37', { scope: '/' });
-      await navigator.serviceWorker.ready;
-      console.log('[PWA] Service Worker 已注册', registration.scope);
-      return true;
-    } catch (error) {
-      console.warn('[PWA] Service Worker 注册失败', error);
-      return false;
-    }
-  }
-
   async function init() {
     if (window.__appInitCompleted || window.__appInitInProgress) return;
     window.__appInitInProgress = true;
-
-    await registerServiceWorker();
 
     // ==================== Event Bindings A (from init-event-bindingsA.js) ====================
     await window.initEventBindingsA(state, db);
